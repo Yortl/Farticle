@@ -93,8 +93,14 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
     data = job_read(jid)
     try:
         if kind == "fetch":
-            html, title = fetch(CDP_HOST, url, wait_s=18)
-            text = extract_readability(html) or ""
+            text, title = "", ""
+            # 两次尝试: 第1次可能只抓到 consent 弹窗层 (点了但正文未渲染), 第2次 cookie 已存
+            for attempt in range(2):
+                html, title = fetch(CDP_HOST, url, wait_s=18)
+                text = extract_readability(html) or ""
+                if len(text.split()) >= 80:
+                    break
+                time.sleep(3)
             words = len(text.split())
             if words < 80:
                 raise RuntimeError(f"正文仅 {words} 词, 可能被墙/BPC未生效 (看浏览器 tab)")
@@ -125,8 +131,13 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     data["progress"] = f"[{outlet_name}] {got_this+1}/{per}: {a['title'][:55]}"
                     job_write(jid, data)
                     try:
-                        html, ptitle = fetch(CDP_HOST, a["url"], wait_s=15)
-                        text = extract_readability(html) or ""
+                        text = ""
+                        for attempt in range(2):
+                            html, ptitle = fetch(CDP_HOST, a["url"], wait_s=15)
+                            text = extract_readability(html) or ""
+                            if len(text.split()) >= 120:
+                                break
+                            time.sleep(3)
                         words = len(text.split())
                         if words < 120:
                             data.setdefault("skipped", []).append(f"{outlet_name}: {a['title'][:55]}")

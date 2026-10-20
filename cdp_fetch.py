@@ -155,6 +155,35 @@ def _try_click_turnstile(tab) -> bool:
         return False
 
 
+def _click_consent(tab) -> bool:
+    """GDPR cookie consent: 找 Reject All / I Accept 按钮点掉 (wapo 欧区出口必弹,
+    不点掉 readability 只能提出 consent 文本)。幂等: 没弹窗就不点。"""
+    try:
+        btn = tab.eval_js("""
+            (() => {
+              const b = [...document.querySelectorAll('button')].find(x =>
+                /^(reject all|i accept|accept all|同意|拒绝全部)$/i.test((x.textContent||'').trim()));
+              if (!b) return null;
+              const r = b.getBoundingClientRect();
+              return {x: r.x + r.width/2, y: r.y + r.height/2};
+            })()
+        """)
+        if not btn:
+            return False
+        tab.call("Input.dispatchMouseEvent", type="mouseMoved", x=btn["x"], y=btn["y"])
+        time.sleep(0.4)
+        tab.call("Input.dispatchMouseEvent", type="mousePressed", x=btn["x"], y=btn["y"],
+                 button="left", clickCount=1)
+        tab.call("Input.dispatchMouseEvent", type="mouseReleased", x=btn["x"], y=btn["y"],
+                 button="left", clickCount=1)
+        print(f"[cdp] consent clicked ({btn['x']:.0f},{btn['y']:.0f})", file=sys.stderr)
+        time.sleep(3)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[cdp] consent fail: {str(e)[:50]}", file=sys.stderr)
+        return False
+
+
 def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> str:
     """开新 tab 加载 url, 等 BPC 处理完, 返回页面 innerText。
     stealth=False (默认): 真实浏览器零注入 —— 任何 UA 覆盖/JS 补丁/主动 reload 都是 DataDome
@@ -194,6 +223,8 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
             title = (tab.eval_js("document.title") or "")
             blocked = ("请稍候" in title or "moment" in title.lower()
                        or "attention" in title.lower() or title in ("", "economist.com"))
+            # GDPR cookie consent (wapo 等欧区出口必弹): 点 Reject All 关掉, 否则正文被弹窗挡住
+            _click_consent(tab)
             if not blocked:
                 break
             print(f"[cdp] interstitial round {attempt+1}, reloading…", file=sys.stderr)
