@@ -45,6 +45,10 @@ def fm_escape(s: str) -> str:
 
 
 def save_article(title: str, source: str, url: str, words: int, text: str) -> str:
+    # 按 url 幂等: 已抓过直接复用 (多源/重跑防重复)
+    for f in ART.glob("*.md"):
+        if f"\nurl: {url}\n" in f.read_text(encoding="utf-8"):
+            return f.stem
     aid = uuid.uuid4().hex[:10]
     fm = (f"---\nid: {aid}\ntitle: {fm_escape(title)}\nsource: {source}\nurl: {url}\n"
           f"words: {words}\nfetched: {time.strftime('%Y-%m-%d %H:%M')}\n---\n\n")
@@ -98,7 +102,7 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
             aid = save_article(title, url.split("/")[2] if "//" in url else url, url, words, text)
             data.update(status="done", articles=[{"id": aid, "title": title, "words": words}])
         else:  # discover: 多源
-            got, seen_titles = [], set()
+            got, seen_titles, seen_urls = [], set(), set()
             outlets = [o.strip() for o in outlet.split(",") if o.strip()]
             total = len(outlets) * per
             done_n = 0
@@ -114,8 +118,9 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     if got_this >= per or done_n >= total:
                         break
                     tok = re.sub(r"[^\w]+", " ", a["title"].lower()).strip()
-                    if tok in seen_titles:
+                    if tok in seen_titles or a["url"] in seen_urls:
                         continue
+                    seen_urls.add(a["url"])
                     data["status"] = "running"
                     data["progress"] = f"[{outlet_name}] {got_this+1}/{per}: {a['title'][:55]}"
                     job_write(jid, data)

@@ -167,7 +167,13 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
                                      method="PUT")
         tab_info = json.loads(urllib.request.urlopen(req, timeout=15).read())
     ws = tab_info["webSocketDebuggerUrl"]
+    tab_id = tab_info["id"]
     tab = Tab(ws)
+    def close_chrome_tab():
+        try:
+            http_json(host, f"/json/close/{tab_id}", timeout=8)
+        except Exception:
+            pass
     try:
         time.sleep(wait_s)  # 等 BPC 注入/跳转; 不 reload、不注入任何脚本
         # Cloudflare Turnstile 勾选循环: 挑战页标题 "Just a moment..."
@@ -201,6 +207,7 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
         return html, title
     finally:
         tab.close()
+        close_chrome_tab()
 
 
 def extract_readability(html: str) -> str | None:
