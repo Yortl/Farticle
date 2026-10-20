@@ -89,7 +89,8 @@ def slugify(s: str, maxlen: int = 60) -> str:
     return re.sub(r"[\s_]+", "-", s).strip("-")[:maxlen] or "untitled"
 
 
-def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "", per: int = 3, days: int = 30):
+def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "", per: int = 3, days: int = 30,
+             min_words: int = 120, max_words: int = 100000):
     data = job_read(jid)
     try:
         if kind == "fetch":
@@ -104,6 +105,8 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
             words = len(text.split())
             if words < 80:
                 raise RuntimeError(f"正文仅 {words} 词, 可能被墙/BPC未生效 (看浏览器 tab)")
+            if not (min_words <= words <= max_words):
+                raise RuntimeError(f"正文 {words} 词, 不在设定范围 [{min_words}, {max_words}]")
             title = title[:140] or url
             aid = save_article(title, url.split("/")[2] if "//" in url else url, url, words, text)
             data.update(status="done", articles=[{"id": aid, "title": title, "words": words}])
@@ -135,12 +138,13 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                         for attempt in range(2):
                             html, ptitle = fetch(CDP_HOST, a["url"], wait_s=15)
                             text = extract_readability(html) or ""
-                            if len(text.split()) >= 120:
+                            if min_words <= len(text.split()) <= max_words:
                                 break
                             time.sleep(3)
                         words = len(text.split())
-                        if words < 120:
-                            data.setdefault("skipped", []).append(f"{outlet_name}: {a['title'][:55]}")
+                        if not (min_words <= words <= max_words):
+                            why = "过短" if words < min_words else "过长"
+                            data.setdefault("skipped", []).append(f"{outlet_name} ({words}词{why}): {a['title'][:45]}")
                             continue
                         aid = save_article(ptitle or a["title"], cfg["domain"], a["url"], words, text)
                         got.append({"id": aid, "outlet": outlet_name, "title": a["title"],
@@ -188,6 +192,8 @@ class DiscoverReq(BaseModel):
     outlets: list[str] = ["atlantic"]
     per_outlet: int = 2
     days: int = 30
+    min_words: int = 120
+    max_words: int = 100000
 
 
 @app.get("/api/health")
@@ -218,7 +224,8 @@ def api_discover(req: DiscoverReq):
             "articles": [], "progress": "searching..."}
     job_write(jid, data)
     threading.Thread(target=run_job,
-                     args=(jid, "discover", "", req.topic, ",".join(req.outlets), req.per_outlet, req.days),
+                     args=(jid, "discover", "", req.topic, ",".join(req.outlets), req.per_outlet,
+                           req.days, req.min_words, req.max_words),
                      daemon=True).start()
     return data
 

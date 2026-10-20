@@ -120,6 +120,12 @@ button:disabled { opacity: .45; cursor: default; }
       <input type="number" id="per" value="2" min="1" max="5" title="每源篇数">
       <button id="btn-discover" class="ghost">开始批量</button>
     </div>
+    <div class="per-row">
+      词数范围
+      <input type="number" id="minw" value="120" min="50" title="最少词数"> –
+      <input type="number" id="maxw" value="100000" title="最多词数"> 词
+      <span style="font-size:12px;opacity:.8">范围外自动跳过换下一篇</span>
+    </div>
     <div class="hint">付费墙源经局域网 Chrome + BPC 获取 (标记 BPC), 免费源直接抓取 (标记 直抓)</div>
     <div class="progress" id="prog"><div class="spinner"></div><span id="prog-text">…</span></div>
     <div class="err" id="err"></div>
@@ -272,7 +278,8 @@ document.getElementById("btn-discover").onclick = async () => {
   if (!topic) return showError("请输入话题");
   if (!selected.size) return showError("请至少选择一个源");
   showError(""); showProg(true, "搜索文章…");
-  const body = { topic, outlets: [...selected], per_outlet: +document.getElementById("per").value, days: 30 };
+  const body = { topic, outlets: [...selected], per_outlet: +document.getElementById("per").value, days: 30,
+    min_words: +document.getElementById("minw").value, max_words: +document.getElementById("maxw").value };
   const j = await (await fetch("/api/discover", {method:"POST",
     headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)})).json();
   pollJob(j.id);
