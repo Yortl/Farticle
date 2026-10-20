@@ -96,31 +96,45 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
             title = title[:140] or url
             aid = save_article(title, url.split("/")[2] if "//" in url else url, url, words, text)
             data.update(status="done", articles=[{"id": aid, "title": title, "words": words}])
-        else:  # discover
-            cfg = OUTLETS.get(outlet) or next(
-                (v for v in OUTLETS.values() if v["domain"] == outlet), None)
-            if not cfg:
-                raise RuntimeError(f"未知媒体 {outlet}")
-            arts = bing_news(topic, cfg["domain"], since_days=days)[: max(per * 3, 8)]
-            data["total_candidates"] = len(arts)
-            got = []
-            for a in arts:
-                if len(got) >= per:
-                    break
-                data["status"] = "running"
-                data["progress"] = f"{len(got)}/{per}: {a['title'][:60]}"
-                job_write(jid, data)
-                try:
-                    text, ptitle = fetch(CDP_HOST, a["url"], wait_s=15)
-                    words = len(text.split())
-                    if words < 120:
-                        data.setdefault("skipped", []).append(a["title"][:60])
+        else:  # discover: 多源
+            got, seen_titles = [], set()
+            outlets = [o.strip() for o in outlet.split(",") if o.strip()]
+            total = len(outlets) * per
+            done_n = 0
+            for outlet_name in outlets:
+                cfg = OUTLETS.get(outlet_name) or next(
+                    (v for v in OUTLETS.values() if v["domain"] == outlet_name), None)
+                if not cfg:
+                    data.setdefault("errors", []).append(f"未知媒体 {outlet_name}")
+                    continue
+                arts = bing_news(topic, cfg["domain"], since_days=days)[: max(per * 3, 8)]
+                got_this = 0
+                for a in arts:
+                    if got_this >= per or done_n >= total:
+                        break
+                    tok = re.sub(r"[^\w]+", " ", a["title"].lower()).strip()
+                    if tok in seen_titles:
                         continue
-                    aid = save_article(ptitle or a["title"], cfg["domain"], a["url"], words, text)
-                    got.append({"id": aid, "title": a["title"], "words": words, "url": a["url"]})
-                except Exception as e:  # noqa: BLE001
-                    data.setdefault("errors", []).append(f"{a['title'][:50]}: {str(e)[:60]}")
-                time.sleep(2)
+                    data["status"] = "running"
+                    data["progress"] = f"[{outlet_name}] {got_this+1}/{per}: {a['title'][:55]}"
+                    job_write(jid, data)
+                    try:
+                        text, ptitle = fetch(CDP_HOST, a["url"], wait_s=15)
+                        words = len(text.split())
+                        if words < 120:
+                            data.setdefault("skipped", []).append(f"{outlet_name}: {a['title'][:55]}")
+                            continue
+                        aid = save_article(ptitle or a["title"], cfg["domain"], a["url"], words, text)
+                        got.append({"id": aid, "outlet": outlet_name, "title": a["title"],
+                                    "words": words, "url": a["url"]})
+                        seen_titles.add(tok)
+                        got_this += 1
+                        done_n += 1
+                    except Exception as e:  # noqa: BLE001
+                        data.setdefault("errors", []).append(f"{outlet_name}: {a['title'][:45]}: {str(e)[:55]}")
+                    time.sleep(2)
+                if done_n >= total:
+                    break
             data.update(status="done", articles=got)
         data["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
     except Exception as e:  # noqa: BLE001
@@ -153,8 +167,8 @@ class FetchReq(BaseModel):
 
 class DiscoverReq(BaseModel):
     topic: str
-    outlet: str = "atlantic"
-    per: int = 3
+    outlets: list[str] = ["atlantic"]
+    per_outlet: int = 2
     days: int = 30
 
 
@@ -181,11 +195,12 @@ def api_fetch(req: FetchReq):
 def api_discover(req: DiscoverReq):
     jid = uuid.uuid4().hex[:8]
     data = {"id": jid, "kind": "discover", "status": "running", "topic": req.topic,
-            "outlet": req.outlet, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "outlets": req.outlets, "per_outlet": req.per_outlet,
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "articles": [], "progress": "searching..."}
     job_write(jid, data)
     threading.Thread(target=run_job,
-                     args=(jid, "discover", "", req.topic, req.outlet, req.per, req.days),
+                     args=(jid, "discover", "", req.topic, ",".join(req.outlets), req.per_outlet, req.days),
                      daemon=True).start()
     return data
 
