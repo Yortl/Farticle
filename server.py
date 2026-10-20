@@ -134,9 +134,11 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     data["progress"] = f"[{outlet_name}] {got_this+1}/{per}: {a['title'][:55]}"
                     job_write(jid, data)
                     try:
+                        # freedium 镜像源 (economist): 原文页只有摘要, 用镜像拿全文
+                        target = (cfg.get("mirror", "") + a["url"]) if cfg.get("mirror") else a["url"]
                         text = ""
                         for attempt in range(2):
-                            html, ptitle = fetch(CDP_HOST, a["url"], wait_s=15)
+                            html, ptitle = fetch(CDP_HOST, target, wait_s=15)
                             text = extract_readability(html) or ""
                             if min_words <= len(text.split()) <= max_words:
                                 break
@@ -168,11 +170,12 @@ from outlets import OUTLETS  # noqa: E402
 
 OUTLET_LABELS = {
     "atlantic": "大西洋月刊", "wapo": "华盛顿邮报", "newscientist": "新科学家",
-    "guardian": "卫报", "csmonitor": "基督教科学箴言报", "bbc": "BBC",
+    "guardian": "卫报", "bbc": "BBC",
     "time": "时代周刊", "newsweek": "新闻周刊", "sciam": "科学美国人",
     "psychtoday": "今日心理学", "natgeo": "国家地理",
     "wired": "Wired", "cnbc": "CNBC", "npr": "NPR", "vox": "Vox",
     "arstechnica": "Ars Technica",
+    "economist": "经济学人", "nytimes": "纽约时报",
 }
 
 

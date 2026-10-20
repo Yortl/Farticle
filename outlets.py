@@ -7,7 +7,6 @@ status 列是本机真实测试结果, 换网络环境后以实际运行为准 (
 OUTLETS = {
     # ---- free: 直抓稳定 ----
     "guardian":    {"domain": "theguardian.com",    "tier": "free",    "enabled": True},
-    "csmonitor":   {"domain": "csmonitor.com",      "tier": "free",    "enabled": True},
     "bbc":         {"domain": "bbc.com",            "tier": "free",    "enabled": True},
     "natgeo":      {"domain": "nationalgeographic.com", "tier": "free", "enabled": True},
     "time":        {"domain": "time.com",           "tier": "free",    "enabled": True},
@@ -24,9 +23,10 @@ OUTLETS = {
     "atlantic":    {"domain": "theatlantic.com",    "tier": "metered", "enabled": True},
     "newscientist":{"domain": "newscientist.com",   "tier": "metered", "enabled": True},
     "wapo":        {"domain": "washingtonpost.com", "tier": "metered", "enabled": True},
-    # ---- dead: 对直抓与 wayback 均 403, 本 IP 无解 (2026-10-19 实测结论, 留档不开) ----
-    "economist":   {"domain": "economist.com",      "tier": "hard",    "enabled": False},
-    "nytimes":     {"domain": "nytimes.com",        "tier": "hard",    "enabled": False},
+    # ---- 2026-10-20 起经真实浏览器 CDP 验证可用 ----
+    "economist":   {"domain": "economist.com",      "tier": "mirror",  "enabled": True,
+                    "mirror": "https://freedium-mirror.cfd/"},   # freedium 免费镜像拿全文
+    "nytimes":     {"domain": "nytimes.com",        "tier": "metered", "enabled": True},
     "wsj":         {"domain": "wsj.com",            "tier": "hard",    "enabled": False},
     "hbr":         {"domain": "hbr.org",            "tier": "hard",    "enabled": False},
     "ft":          {"domain": "ft.com",             "tier": "hard",    "enabled": False},

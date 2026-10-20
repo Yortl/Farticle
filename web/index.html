@@ -226,7 +226,7 @@ async function loadOutlets() {
   for (const [k, v] of Object.entries(OUTLETS)) {
     const c = document.createElement("span");
     c.className = "chip" + (selected.has(k) ? " on" : "");
-    c.innerHTML = `${v.label}<span class="t">${v.tier==="free"?"直抓":"BPC"}</span>`;
+    c.innerHTML = `${v.label}<span class="t">${v.tier==="free"?"直抓":v.tier==="mirror"?"镜像":"BPC"}</span>`;
     c.onclick = () => {
       if (selected.has(k)) { selected.delete(k); c.classList.remove("on"); }
       else { selected.add(k); c.classList.add("on"); }
