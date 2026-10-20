@@ -185,10 +185,9 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
             time.sleep(8)  # 等验证通过+跳转
         # interstitial 轮询: Atlantic/CF 的 "请稍候" 墙随机出现, reload 即过 (实测 1 次 reload 出正文)
         for attempt in range(5):
-            text = tab.eval_js("document.body ? document.body.innerText : ''") or ""
             title = (tab.eval_js("document.title") or "")
             blocked = ("请稍候" in title or "moment" in title.lower()
-                       or "attention" in title.lower() or len(text) < 800)
+                       or "attention" in title.lower() or title in ("", "economist.com"))
             if not blocked:
                 break
             print(f"[cdp] interstitial round {attempt+1}, reloading…", file=sys.stderr)
@@ -196,12 +195,43 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
             time.sleep(8)
         cur = tab.eval_js("location.href")
         title = (tab.eval_js("document.title") or "").split(" - ")[0].split(" | ")[0].strip()
-        text = tab.eval_js("document.body ? document.body.innerText : ''") or ""
-        print(f"[cdp] final_url={cur}\n[cdp] title={title}\n[cdp] text_chars={len(text)}",
+        html = tab.eval_js("document.documentElement.outerHTML") or ""
+        print(f"[cdp] final_url={cur}\n[cdp] title={title}\n[cdp] html_chars={len(html)}",
               file=sys.stderr)
-        return text, title
+        return html, title
     finally:
         tab.close()
+
+
+def extract_readability(html: str) -> str | None:
+    """readability 算法提正文 (HTML→纯文本, 段落分行)。"""
+    try:
+        from readability import Document
+        from bs4 import BeautifulSoup
+        doc = Document(html)
+        text = BeautifulSoup(doc.summary(), "lxml").get_text("\n")
+        lines = [l.strip() for l in text.split("\n")]
+        # 修首字下沉拆行: "T" + "hese days..." → "These days..."
+        merged = []
+        i = 0
+        while i < len(lines):
+            l = lines[i]
+            if (len(l) <= 2 and l and i + 1 < len(lines)
+                    and lines[i+1] and lines[i+1][:1].islower()):
+                merged.append(l + lines[i+1])
+                i += 2
+                continue
+            merged.append(l)
+            i += 1
+        out = []
+        for l in merged:
+            if not l and out and not out[-1]:
+                continue
+            out.append(l)
+        return "\n".join(out).strip() or None
+    except Exception as e:  # noqa: BLE001
+        print(f"[cdp] readability fail: {e}", file=sys.stderr)
+        return None
 
 
 def to_markdown(text: str, url: str) -> str:
@@ -238,7 +268,8 @@ def main():
 
     if not args.url:
         ap.error("需要 url 或 --check")
-    text, _ptitle = fetch(args.host, args.url, args.wait)
+    html, title = fetch(args.host, args.url, args.wait)
+    text = extract_readability(html) or ""
     if len(text.split()) < 100:
         print("[warn] 正文少于100词, BPC 可能未生效或页面被墙", file=sys.stderr)
     md = to_markdown(text, args.url)
