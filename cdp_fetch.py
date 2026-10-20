@@ -123,6 +123,38 @@ class Tab:
         self.sock.close()
 
 
+def _try_click_turnstile(tab) -> bool:
+    """检测 Cloudflare Turnstile 勾选框并模拟点击。返回是否找到并点了。
+    Turnstile 的 checkbox 在跨域 iframe (challenges.cloudflare.com) 里, 页面 JS 摸不到,
+    必须用 CDP 的 DOM 域按坐标点击。"""
+    try:
+        # 找 turnstile iframe 的位置
+        box = tab.eval_js("""
+            (() => {
+              const f = [...document.querySelectorAll('iframe')]
+                .find(f => (f.src||'').includes('challenges.cloudflare.com'));
+              if (!f) return null;
+              const r = f.getBoundingClientRect();
+              return {x: r.x + r.width/2, y: r.y + r.height/2, w: r.width, h: r.height};
+            })()
+        """)
+        if not box or box.get("w", 0) < 20:
+            return False
+        # checkbox 位于 iframe 内偏左位置 (整框中心偏左 ~70px 处)
+        cx, cy = box["x"] + min(70, box["w"] / 2), box["y"] + box["h"] / 2
+        tab.call("Input.dispatchMouseEvent", type="mouseMoved", x=cx, y=cy)
+        time.sleep(0.4)
+        tab.call("Input.dispatchMouseEvent", type="mousePressed", x=cx, y=cy,
+                 button="left", clickCount=1)
+        tab.call("Input.dispatchMouseEvent", type="mouseReleased", x=cx, y=cy,
+                 button="left", clickCount=1)
+        print(f"[cdp] turnstile clicked at ({cx:.0f},{cy:.0f})", file=sys.stderr)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[cdp] turnstile click fail: {str(e)[:60]}", file=sys.stderr)
+        return False
+
+
 def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> str:
     """开新 tab 加载 url, 等 BPC 处理完, 返回页面 innerText。
     stealth=False (默认): 真实浏览器零注入 —— 任何 UA 覆盖/JS 补丁/主动 reload 都是 DataDome
@@ -138,13 +170,36 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
     tab = Tab(ws)
     try:
         time.sleep(wait_s)  # 等 BPC 注入/跳转; 不 reload、不注入任何脚本
+        # Cloudflare Turnstile 勾选循环: 挑战页标题 "Just a moment..."
+        for attempt in range(4):
+            title = (tab.eval_js("document.title") or "").lower()
+            has_cf = tab.eval_js(
+                "!![...document.querySelectorAll('iframe')]"
+                ".find(f => (f.src||'').includes('challenges.cloudflare.com'))")
+            if not any(k in title for k in ("just a moment", "attention", "请稍候", "checking", "security")) and not has_cf:
+                break
+            print(f"[cdp] cloudflare challenge (round {attempt+1}), trying checkbox…",
+                  file=sys.stderr)
+            time.sleep(4)  # 等勾选框渲染
+            _try_click_turnstile(tab)
+            time.sleep(8)  # 等验证通过+跳转
+        # interstitial 轮询: Atlantic/CF 的 "请稍候" 墙随机出现, reload 即过 (实测 1 次 reload 出正文)
+        for attempt in range(5):
+            text = tab.eval_js("document.body ? document.body.innerText : ''") or ""
+            title = (tab.eval_js("document.title") or "")
+            blocked = ("请稍候" in title or "moment" in title.lower()
+                       or "attention" in title.lower() or len(text) < 800)
+            if not blocked:
+                break
+            print(f"[cdp] interstitial round {attempt+1}, reloading…", file=sys.stderr)
+            tab.call("Page.reload")
+            time.sleep(8)
         cur = tab.eval_js("location.href")
-        title = tab.eval_js("document.title") or ""
-        # 不滚动 (瞬移滚动是行为特征); BPC 解出的全文本来就在 DOM 里
+        title = (tab.eval_js("document.title") or "").split(" - ")[0].split(" | ")[0].strip()
         text = tab.eval_js("document.body ? document.body.innerText : ''") or ""
         print(f"[cdp] final_url={cur}\n[cdp] title={title}\n[cdp] text_chars={len(text)}",
               file=sys.stderr)
-        return text
+        return text, title
     finally:
         tab.close()
 
@@ -183,7 +238,7 @@ def main():
 
     if not args.url:
         ap.error("需要 url 或 --check")
-    text = fetch(args.host, args.url, args.wait)
+    text, _ptitle = fetch(args.host, args.url, args.wait)
     if len(text.split()) < 100:
         print("[warn] 正文少于100词, BPC 可能未生效或页面被墙", file=sys.stderr)
     md = to_markdown(text, args.url)

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>外刊抓取 · Exam English Fetcher</title>
+<style>
+:root {
+  --bg: #f7f6f3; --card: #fffefb; --ink: #1a1d21; --sub: #6b7280;
+  --accent: #0f6b5c; --accent-soft: #e6f2ef; --line: #e7e4dd;
+  --danger: #b3372f; --radius: 12px;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg); color: var(--ink);
+  font: 15px/1.75 -apple-system, "PingFang SC", "Segoe UI", sans-serif; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 80px; }
+header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 26px; }
+h1 { font-size: 22px; letter-spacing: -.02em; }
+h1 .dot { color: var(--accent); }
+#health { font-size: 12.5px; color: var(--sub); }
+#health .ok { color: var(--accent); }
+#health .bad { color: var(--danger); }
+
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 22px; margin-bottom: 18px; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+input, select {
+  border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px;
+  font: inherit; background: #fff; color: var(--ink); }
+input[type=text], input[type=url] { flex: 1; min-width: 220px; }
+input:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+button { border: 0; border-radius: 8px; padding: 9px 18px; font: inherit; cursor: pointer;
+  background: var(--accent); color: #fff; transition: opacity .15s; }
+button:hover { opacity: .88; }
+button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+button:disabled { opacity: .45; cursor: default; }
+.hint { font-size: 12.5px; color: var(--sub); margin-top: 8px; }
+
+.progress { margin-top: 14px; font-size: 13.5px; color: var(--sub);
+  display: none; align-items: center; gap: 8px; }
+.progress.on { display: flex; }
+.spinner { width: 14px; height: 14px; border: 2px solid var(--line);
+  border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.err { color: var(--danger); font-size: 13.5px; margin-top: 10px; display: none; }
+
+.list { margin-top: 6px; }
+.article-card { padding: 18px 20px; background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); margin-bottom: 12px; cursor: pointer;
+  transition: border-color .15s, transform .15s; }
+.article-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.article-card h3 { font-size: 16px; font-weight: 600; letter-spacing: -.01em; margin-bottom: 4px; }
+.meta { font-size: 12.5px; color: var(--sub); display: flex; gap: 12px; flex-wrap: wrap; }
+.badge { background: var(--accent-soft); color: var(--accent); border-radius: 20px;
+  padding: 1px 10px; font-size: 11.5px; }
+
+/* 阅读视图 */
+#reader { position: fixed; inset: 0; background: rgba(20,22,24,.45); display: none;
+  z-index: 50; backdrop-filter: blur(3px); }
+#reader.on { display: block; }
+.reader-card { position: absolute; top: 3vh; left: 50%; transform: translateX(-50%);
+  width: min(760px, 94vw); max-height: 94vh; overflow-y: auto;
+  background: var(--card); border-radius: 16px; padding: 40px 48px 56px; }
+.reader-card h2 { font-size: 24px; line-height: 1.4; letter-spacing: -.02em; margin-bottom: 8px; }
+.reader-meta { color: var(--sub); font-size: 13px; margin-bottom: 26px; padding-bottom: 18px;
+  border-bottom: 1px solid var(--line); }
+.reader-meta a { color: var(--accent); text-decoration: none; word-break: break-all; }
+.reader-body { font-size: 16.5px; line-height: 1.85; }
+.reader-body p { margin-bottom: 1.2em; }
+.reader-body h1, .reader-body h2, .reader-body h3 { margin: 1.4em 0 .6em; letter-spacing: -.01em; }
+.reader-body blockquote { border-left: 3px solid var(--accent); margin: 1.2em 0;
+  padding: 2px 18px; color: var(--sub); }
+.close-x { position: sticky; top: 0; float: right; background: none; border: 0;
+  font-size: 26px; color: var(--sub); cursor: pointer; line-height: 1; padding: 4px; }
+.close-x:hover { color: var(--ink); }
+.empty { text-align: center; color: var(--sub); padding: 40px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>外刊抓取<span class="dot">.</span></h1>
+    <span id="health">检查 CDP…</span>
+  </header>
+
+  <div class="card">
+    <div class="row">
+      <input type="url" id="url" placeholder="粘贴文章 URL (Economist / Atlantic / WaPo …)">
+      <button id="btn-fetch">抓取单篇</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <select id="outlet"></select>
+      <input type="text" id="topic" placeholder="话题, 如 artificial intelligence" style="flex:1;min-width:200px">
+      <button id="btn-discover" class="ghost">搜索并抓取</button>
+    </div>
+    <div class="hint">付费墙源经局域网 Chrome + BPC 插件获取; 免费源直接抓取</div>
+    <div class="progress" id="prog"><div class="spinner"></div><span id="prog-text">…</span></div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="list" id="list"></div>
+</div>
+
+<div id="reader"><div class="reader-card">
+  <button class="close-x" onclick="closeReader()">×</button>
+  <h2 id="r-title"></h2>
+  <div class="reader-meta" id="r-meta"></div>
+  <div class="reader-body" id="r-body"></div>
+</div></div>
+
+<script>
+const CDP_LABELS = {};
+let OUTLETS = {};
+let pollTimer = null, activeJob = null;
+
+// md -> html (最小实现: 段落/标题/引用/粗体/斜体)
+function md2html(md) {
+  const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  let out = "", para = [];
+  const flush = () => { if (para.length) { out += "<p>" + para.join("<br>") + "</p>"; para = []; } };
+  for (const line of md.split("\n")) {
+    const t = line.trim();
+    if (!t) { flush(); continue; }
+    let m;
+    if (m = t.match(/^(#{1,3})\s+(.*)/)) { flush(); out += `<h${m[1].length+1}>${inline(m[2])}</h${m[1].length+1}>`; }
+    else if (t.startsWith("> ")) { flush(); out += `<blockquote>${inline(t.slice(2))}</blockquote>`; }
+    else para.push(inline(t));
+  }
+  flush();
+  function inline(s) {
+    s = esc(s);
+    s = s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/\*(.+?)\*/g, "<i>$1</i>");
+    return s;
+  }
+  return out;
+}
+
+async function checkHealth() {
+  const el = document.getElementById("health");
+  try {
+    const r = await fetch("/api/health");
+    const j = await r.json();
+    el.innerHTML = j.ok
+      ? `<span class="ok">● Chrome 已连接</span> ${j.chrome}`
+      : `<span class="bad">● CDP 未连接</span> ${j.error||""}`;
+  } catch { el.innerHTML = `<span class="bad">● 服务不可达</span>`; }
+}
+
+async function loadOutlets() {
+  // 从页面内嵌配置读, 避免 /api 多一个端点
+  const r = await fetch("/api/outlets");
+  OUTLETS = await r.json();
+  const sel = document.getElementById("outlet");
+  for (const [k, v] of Object.entries(OUTLETS)) {
+    const o = document.createElement("option");
+    o.value = k; o.textContent = `${v.label} (${v.tier})`;
+    sel.appendChild(o);
+  }
+}
+
+function showProg(on, text) {
+  document.getElementById("prog").classList.toggle("on", on);
+  if (text) document.getElementById("prog-text").textContent = text;
+}
+function showError(msg) {
+  const el = document.getElementById("err");
+  el.style.display = msg ? "block" : "none";
+  el.textContent = msg || "";
+}
+
+async function pollJob(jid) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const j = await (await fetch(`/api/jobs/${jid}`)).json();
+    showProg(j.status === "running", j.progress || j.status);
+    if (j.status === "error") {
+      showProg(false); showError(j.error); clearInterval(pollTimer); return;
+    }
+    if (j.status === "done") {
+      showProg(false); clearInterval(pollTimer); activeJob = null;
+      const skipped = (j.skipped||[]).length ? ` · 跳过 ${j.skipped.length}` : "";
+      if (!j.articles?.length) showError("没有抓到符合条件的文章" + skipped);
+      await loadList();
+    }
+  }, 1500);
+}
+
+document.getElementById("btn-fetch").onclick = async () => {
+  const url = document.getElementById("url").value.trim();
+  if (!url) return showError("请输入 URL");
+  showError(""); showProg(true, "打开页面, BPC 解墙中…");
+  const j = await (await fetch("/api/fetch", {method:"POST",
+    headers:{"Content-Type":"application/json"}, body: JSON.stringify({url})})).json();
+  pollJob(j.id);
+};
+
+document.getElementById("btn-discover").onclick = async () => {
+  const topic = document.getElementById("topic").value.trim();
+  if (!topic) return showError("请输入话题");
+  showError(""); showProg(true, "搜索文章…");
+  const body = { topic, outlet: document.getElementById("outlet").value, per: 3, days: 30 };
+  const j = await (await fetch("/api/discover", {method:"POST",
+    headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)})).json();
+  pollJob(j.id);
+};
+
+async function loadList() {
+  const arts = await (await fetch("/api/articles")).json();
+  const el = document.getElementById("list");
+  if (!arts.length) { el.innerHTML = `<div class="empty empty-card">还没有文章</div>`; return; }
+  el.innerHTML = "";
+  for (const a of arts) {
+    const div = document.createElement("div");
+    div.className = "article-card";
+    div.innerHTML = `<h3>${esc(a.title||a.url||a.id)}</h3>
+      <div class="meta">
+        <span class="badge">${esc(a.source||"")}</span>
+        <span>${a.words||"?"} 词</span><span>${esc(a.fetched||"")}</span>
+        <button class="ghost" data-del="${a.id}" style="margin-left:auto;padding:3px 12px;font-size:12px">删除</button>
+      </div>`;
+    div.onclick = e => {
+      if (e.target.dataset.del) return;
+      openReader(a.id);
+    };
+    div.querySelector("[data-del]").onclick = async e => {
+      e.stopPropagation();
+      await fetch(`/api/articles/${a.id}`, {method:"DELETE"});
+      loadList();
+    };
+    el.appendChild(div);
+  }
+}
+
+function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+
+async function openReader(aid) {
+  const a = await (await fetch(`/api/articles/${aid}`)).json();
+  document.getElementById("r-title").textContent = a.title || a.url;
+  document.getElementById("r-meta").innerHTML =
+    `<span class="badge">${esc(a.source)}</span> ${a.words} 词 · ${esc(a.fetched)} ·
+     <a href="${esc(a.url)}" target="_blank">原文 ↗</a>`;
+  document.getElementById("r-body").innerHTML = md2html(a.body||"");
+  document.getElementById("reader").classList.add("on");
+  document.querySelector(".reader-card").scrollTop = 0;
+}
+function closeReader(){ document.getElementById("reader").classList.remove("on"); }
+document.getElementById("reader").addEventListener("click", e => {
+  if (e.target.id === "reader") closeReader();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeReader(); });
+
+checkHealth(); setInterval(checkHealth, 30000);
+loadOutlets(); loadList();
+</script>
+</body>
+</html>
