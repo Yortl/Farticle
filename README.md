@@ -34,7 +34,8 @@ python3 run.py "remote work" --days 180 --min-words 300 --outlets guardian,bbc
 python3 run.py --check
 ```
 
-Web 界面: 粘贴 URL 单篇抓取 / 多源 chip 点选 + 每源篇数 + 词数范围 (如 500–1000 词) 批量抓取 /
+Web 界面: 粘贴 URL 单篇抓取 / 多源 chip 点选 + 每源入库篇数 (已在库的也计入, 会标注) /
+可选词数限制 (勾选 400–1200 词才生效, 不勾选不做限制; 短于 80 词的正文一律不收) /
 阅读视图 (首字下沉精排版, 可编辑正文) / 文章库管理。
 
 ## 架构

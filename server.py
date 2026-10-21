@@ -44,16 +44,23 @@ def fm_escape(s: str) -> str:
     return s.replace("\n", " ").strip()
 
 
-def save_article(title: str, source: str, url: str, words: int, text: str) -> str:
-    # 按 url 幂等: 已抓过直接复用 (多源/重跑防重复)
+def ok_words(n: int, lo: int | None, hi: int | None) -> bool:
+    """词数是否合格: lo/hi 为 None 表示不限定范围; 天然下限 80 词防导航/摘要类垃圾正文。"""
+    if n < 80:
+        return False
+    return True if lo is None or hi is None else lo <= n <= hi
+
+
+def save_article(title: str, source: str, url: str, words: int, text: str) -> tuple[str, bool]:
+    """按 url 幂等: 已抓过直接复用 (多源/重跑防重复)。返回 (id, 是否本次新入库)"""
     for f in ART.glob("*.md"):
         if f"\nurl: {url}\n" in f.read_text(encoding="utf-8"):
-            return f.stem
+            return f.stem, False
     aid = uuid.uuid4().hex[:10]
     fm = (f"---\nid: {aid}\ntitle: {fm_escape(title)}\nsource: {source}\nurl: {url}\n"
           f"words: {words}\nfetched: {time.strftime('%Y-%m-%d %H:%M')}\n---\n\n")
     (ART / f"{aid}.md").write_text(fm + text + "\n", encoding="utf-8")
-    return aid
+    return aid, True
 
 
 def load_article(aid: str) -> dict | None:
@@ -90,7 +97,7 @@ def slugify(s: str, maxlen: int = 60) -> str:
 
 
 def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "", per: int = 3, days: int = 30,
-             min_words: int = 120, max_words: int = 100000):
+             min_words: int | None = None, max_words: int | None = None):
     data = job_read(jid)
     try:
         if kind == "fetch":
@@ -99,38 +106,39 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
             for attempt in range(2):
                 html, title = fetch(CDP_HOST, url, wait_s=18)
                 text = extract_readability(html) or ""
-                if len(text.split()) >= 80:
+                if ok_words(len(text.split()), min_words, max_words):
                     break
                 time.sleep(3)
             words = len(text.split())
             if words < 80:
                 raise RuntimeError(f"正文仅 {words} 词, 可能被墙/BPC未生效 (看浏览器 tab)")
-            if not (min_words <= words <= max_words):
+            if not ok_words(words, min_words, max_words):
                 raise RuntimeError(f"正文 {words} 词, 不在设定范围 [{min_words}, {max_words}]")
             title = title[:140] or url
-            aid = save_article(title, url.split("/")[2] if "//" in url else url, url, words, text)
+            aid, _is_new = save_article(title, url.split("/")[2] if "//" in url else url, url, words, text)
             data.update(status="done", articles=[{"id": aid, "title": title, "words": words}])
-        else:  # discover: 多源
-            got, seen_titles, seen_urls = [], set(), set()
+        else:  # discover: 多源; per 指该源最终入库篇数 (已在库的也计数, 标注已存在)
+            got, seen_titles, seen_urls, existing = [], set(), set(), 0
             outlets = [o.strip() for o in outlet.split(",") if o.strip()]
-            total = len(outlets) * per
-            done_n = 0
             for outlet_name in outlets:
                 cfg = OUTLETS.get(outlet_name) or next(
                     (v for v in OUTLETS.values() if v["domain"] == outlet_name), None)
                 if not cfg:
                     data.setdefault("errors", []).append(f"未知媒体 {outlet_name}")
                     continue
-                arts = bing_news(topic, cfg["domain"], since_days=days)[: max(per * 3, 8)]
+                # 不截断候选池: 过短的候选 (World in Brief 等) 会消耗名额, 截断后凑不够 per 篇
+                arts = bing_news(topic, cfg["domain"], since_days=days)
                 if len(arts) < per and cfg.get("sections"):
                     # bing 不收录的站 (bjreview 等): 走栏目列表页发现
                     arts += section_discover(topic, cfg, cdp_host=CDP_HOST)
                 got_this = 0
                 for a in arts:
-                    if got_this >= per or done_n >= total:
+                    if got_this >= per:
                         break
+                    if a["url"] in seen_urls:  # 本轮已试过 (含失败), 不重复消耗配额
+                        continue
                     tok = re.sub(r"[^\w]+", " ", a["title"].lower()).strip()
-                    if tok in seen_titles or a["url"] in seen_urls:
+                    if tok and tok in seen_titles:
                         continue
                     seen_urls.add(a["url"])
                     data["status"] = "running"
@@ -139,30 +147,29 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     try:
                         # freedium 镜像源 (economist): 原文页只有摘要, 用镜像拿全文
                         target = (cfg.get("mirror", "") + a["url"]) if cfg.get("mirror") else a["url"]
-                        text = ""
+                        text, ptitle = "", ""
                         for attempt in range(2):
                             html, ptitle = fetch(CDP_HOST, target, wait_s=15)
                             text = extract_readability(html) or ""
-                            if min_words <= len(text.split()) <= max_words:
+                            if ok_words(len(text.split()), min_words, max_words):
                                 break
                             time.sleep(3)
                         words = len(text.split())
-                        if not (min_words <= words <= max_words):
-                            why = "过短" if words < min_words else "过长"
+                        if not ok_words(words, min_words, max_words):
+                            why = ("过短" if words < 80 else
+                                   "不在词数范围" if (min_words is not None and max_words is not None) else "过短")
                             data.setdefault("skipped", []).append(f"{outlet_name} ({words}词{why}): {a['title'][:45]}")
                             continue
-                        aid = save_article(ptitle or a["title"], cfg["domain"], a["url"], words, text)
+                        aid, is_new = save_article(ptitle or a["title"], cfg["domain"], a["url"], words, text)
                         got.append({"id": aid, "outlet": outlet_name, "title": a["title"],
-                                    "words": words, "url": a["url"]})
+                                    "words": words, "url": a["url"], "new": is_new})
                         seen_titles.add(tok)
-                        got_this += 1
-                        done_n += 1
+                        got_this += 1  # 已在库的也计入: per = 该源最终入库篇数
+                        existing += 0 if is_new else 1
                     except Exception as e:  # noqa: BLE001
                         data.setdefault("errors", []).append(f"{outlet_name}: {a['title'][:45]}: {str(e)[:55]}")
                     time.sleep(2)
-                if done_n >= total:
-                    break
-            data.update(status="done", articles=got)
+            data.update(status="done", articles=got, existing=existing)
         data["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
     except Exception as e:  # noqa: BLE001
         data.update(status="error", error=str(e)[:300])
@@ -199,8 +206,8 @@ class DiscoverReq(BaseModel):
     outlets: list[str] = ["atlantic"]
     per_outlet: int = 2
     days: int = 30
-    min_words: int = 120
-    max_words: int = 100000
+    min_words: int | None = None   # None = 不限定词数范围
+    max_words: int | None = None
 
 
 @app.get("/api/health")
@@ -227,6 +234,7 @@ def api_discover(req: DiscoverReq):
     jid = uuid.uuid4().hex[:8]
     data = {"id": jid, "kind": "discover", "status": "running", "topic": req.topic,
             "outlets": req.outlets, "per_outlet": req.per_outlet,
+            "min_words": req.min_words, "max_words": req.max_words,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "articles": [], "progress": "searching..."}
     job_write(jid, data)

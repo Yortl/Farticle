@@ -122,18 +122,20 @@ button:disabled { opacity: .45; cursor: default; }
       <input type="url" id="url" placeholder="粘贴文章 URL (Economist / Atlantic / WaPo …)">
       <button id="btn-fetch">抓取单篇</button>
     </div>
-    <div style="margin-top:18px; font-size:13.5px; color:var(--sub)">批量: 点选多个源, 设每源篇数</div>
+    <div style="margin-top:18px; font-size:13.5px; color:var(--sub)">批量: 点选多个源, 设每源入库篇数</div>
     <div class="src-row" id="src-row"></div>
     <div class="row">
       <input type="text" id="topic" placeholder="话题, 如 artificial intelligence" style="flex:1;min-width:200px">
-      <input type="number" id="per" value="2" min="1" max="5" title="每源篇数">
+      <input type="number" id="per" value="2" min="1" max="5" title="每源最终入库篇数">
       <button id="btn-discover" class="ghost">开始批量</button>
     </div>
     <div class="per-row">
-      词数范围
-      <input type="number" id="minw" value="120" min="50" title="最少词数"> –
-      <input type="number" id="maxw" value="100000" title="最多词数"> 词
-      <span style="font-size:12px;opacity:.8">范围外自动跳过换下一篇</span>
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="wlim" style="width:auto"> 限定词数
+      </label>
+      <input type="number" id="minw" value="400" min="50" title="最少词数" style="width:70px;text-align:center"> –
+      <input type="number" id="maxw" value="1200" title="最多词数" style="width:80px;text-align:center"> 词
+      <span style="font-size:12px;opacity:.8">勾选后范围外跳过换下一篇; 不勾选不做词数限制</span>
     </div>
     <div class="hint">付费墙源经局域网 Chrome + BPC 获取 (标记 BPC), 免费源直接抓取 (标记 直抓)</div>
     <div class="progress" id="prog"><div class="spinner"></div><span id="prog-text">…</span></div>
@@ -250,8 +252,9 @@ async function loadOutlets() {
   }
 }
 
-function showProg(on, text) {
+function showProg(on, text, spin = true) {
   document.getElementById("prog").classList.toggle("on", on);
+  document.querySelector("#prog .spinner").style.display = spin ? "" : "none";
   if (text) document.getElementById("prog-text").textContent = text;
 }
 function showError(msg) {
@@ -264,14 +267,16 @@ async function pollJob(jid) {
   clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     const j = await (await fetch(`/api/jobs/${jid}`)).json();
-    showProg(j.status === "running", j.progress || j.status);
+    if (j.status === "running") showProg(true, j.progress || j.status);
     if (j.status === "error") {
       showProg(false); showError(j.error); clearInterval(pollTimer); return;
     }
     if (j.status === "done") {
-      showProg(false); clearInterval(pollTimer);
+      clearInterval(pollTimer);
       const n = j.articles?.length || 0;
-      const skipped = (j.skipped||[]).length ? ` · 跳过 ${j.skipped.length}` : "";
+      const skipped = (j.skipped||[]).length ? `, 跳过 ${j.skipped.length}` : "";
+      const ex = j.existing ? ` (其中 ${j.existing} 篇已在库)` : "";
+      showProg(true, n ? `完成: 入库 ${n} 篇${ex}${skipped}` : `没有抓到符合条件的文章${skipped}`, false);
       if (!n) showError("没有抓到符合条件的文章" + skipped);
       else showError("");
       await loadList();
@@ -293,8 +298,8 @@ document.getElementById("btn-discover").onclick = async () => {
   if (!topic) return showError("请输入话题");
   if (!selected.size) return showError("请至少选择一个源");
   showError(""); showProg(true, "搜索文章…");
-  const body = { topic, outlets: [...selected], per_outlet: +document.getElementById("per").value, days: 30,
-    min_words: +document.getElementById("minw").value, max_words: +document.getElementById("maxw").value };
+  const body = { topic, outlets: [...selected], per_outlet: +document.getElementById("per").value, days: 30 };
+  if (document.getElementById("wlim").checked) { body.min_words = +document.getElementById("minw").value; body.max_words = +document.getElementById("maxw").value; }
   const j = await (await fetch("/api/discover", {method:"POST",
     headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)})).json();
   pollJob(j.id);
