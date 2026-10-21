@@ -17,22 +17,25 @@
 ## 快速开始
 
 ```bash
-pip3 install fastapi uvicorn trafilatura readability-lxml beautifulsoup4 lxml
-
+# Web 服务 (需局域网 Chrome 开启 CDP: chrome --remote-debugging-port=9222 --remote-allow-origins=*)
+./farticle.sh install   # 安装依赖 (自动建 venv) + 启动, 首次
+./farticle.sh start     # 启动 (后台常驻, pid/日志在 run/)
+./farticle.sh stop      # 停止
+./farticle.sh restart   # 重启
+./farticle.sh update    # git pull + 依赖同步 + 重启
+./farticle.sh status    # 运行状态 + CDP 连通性 + 文章数
+# 换端口/CDP: FARTICLE_PORT=8901 FARTICLE_CDP=192.168.1.99:9222 ./farticle.sh start
+# 直接跑: python3 server.py --port 8900 --cdp 127.0.0.1:9222
 # CLI: 单话题全源抓取
 python3 run.py "artificial intelligence"
 python3 run.py "remote work" --days 180 --min-words 300 --outlets guardian,bbc
 
 # CLI 自检
 python3 run.py --check
-
-# Web 服务 (需局域网 Chrome 开启 CDP: chrome --remote-debugging-port=9222 --remote-allow-origins=*)
-python3 server.py --port 8900 --cdp 127.0.0.1:9222
-# 浏览器打开 http://localhost:8900
 ```
 
 Web 界面: 粘贴 URL 单篇抓取 / 多源 chip 点选 + 每源篇数 + 词数范围 (如 500–1000 词) 批量抓取 /
-阅读视图 (首字下沉精排版) / 文章库管理。
+阅读视图 (首字下沉精排版, 可编辑正文) / 文章库管理。
 
 ## 架构
 

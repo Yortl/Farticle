@@ -3,3 +3,5 @@ articles/
 *.epub
 web_store/
 bpc-chrome.zip
+run/
+venv/

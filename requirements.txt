@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+trafilatura
+readability-lxml
+beautifulsoup4
+lxml
+pydantic
