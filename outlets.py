@@ -19,6 +19,10 @@ OUTLETS = {
     "npr":         {"domain": "npr.org",            "tier": "free",    "enabled": True},
     "vox":         {"domain": "vox.com",            "tier": "free",    "enabled": True},
     "arstechnica": {"domain": "arstechnica.com",    "tier": "free",    "enabled": True},
+    # ---- 中国英文外宣媒体 (考试也常引用其社论/报道) ----
+    "chinadaily":  {"domain": "chinadaily.com.cn",  "tier": "free",    "enabled": True},
+    "bjreview":    {"domain": "bjreview.com",       "tier": "free",    "enabled": True,
+                    "sections": ["World", "Business", "Opinion"]},  # bing 不收录, 走栏目列表发现
     # ---- metered: 靠 wayback 缓存, 有多少算多少 ----
     "atlantic":    {"domain": "theatlantic.com",    "tier": "metered", "enabled": True},
     "newscientist":{"domain": "newscientist.com",   "tier": "metered", "enabled": True},

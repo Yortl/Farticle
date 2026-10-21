@@ -1,6 +1,7 @@
 """发现层: Bing News RSS (给真实直链) + Google News RSS (覆盖更全, 链接需解码, 解码失败只记标题)。
 只用标准库。Bing 的 apiclick 包装链接用 url= 参数解包即可拿到原文 URL —— 比 Google News 的
 batchexecute 解码稳得多, 所以 Bing 为主。"""
+import json
 import re
 import time
 import urllib.parse
@@ -99,6 +100,57 @@ def _gn_token(title: str) -> str:
     """GN 标题带 ' - The Guardian' 后缀, 去掉后归一化, 用于和 Bing 结果对齐。"""
     t = re.sub(r"\s+-\s+[^-]{2,40}$", "", title)
     return re.sub(r"[^\w]+", " ", t.lower()).strip()
+
+
+def section_discover(topic: str, cfg: dict, cdp_host: str = "127.0.0.1:9222") -> list[dict]:
+    """栏目列表页发现 (bjreview 等不被 bing 收录的站点):
+    打开 cfg['sections'] 各栏目页, 抓文章链接, 按话题关键词过滤标题。"""
+    import time as _t
+    import urllib.request as _u
+    kw = [w for w in re.split(r"[^a-z]+", topic.lower()) if len(w) > 3]
+    out = []
+    for sec in cfg.get("sections", []):
+        url = f"https://www.{cfg['domain']}/{sec}/"
+        try:
+            # 复用 CDP: 开 tab → 抓所有文章链接+标题 → 关 tab
+            req = _u.Request(f"http://{cdp_host}/json/new?{urllib.parse.quote(url, safe='')}", method="PUT")
+            info = json.loads(_u.urlopen(req, timeout=15).read())
+            import socket as _s
+            from urllib.parse import urlparse as _up
+            hostport = _up(info["webSocketDebuggerUrl"]).netloc
+            sock = _s.create_connection((hostport.split(":")[0], int(hostport.split(":")[1])), timeout=30)
+            # 简化: 用 cdp_fetch.Tab 的手写 ws
+            from cdp_fetch import Tab
+            tab = Tab(info["webSocketDebuggerUrl"])
+            _t.sleep(6)
+            links = tab.eval_js("""
+                [...document.querySelectorAll('a')].filter(a => {
+                    const h = a.href || '';
+                    return h.includes('bjreview.com') && /t[0-9]{8}_[0-9]+/.test(h) && a.textContent.trim().length > 15;
+                }).map(a => ({url: a.href, title: a.textContent.trim()}))
+            """) or []
+            tab.close()
+            _u.urlopen(f"http://{cdp_host}/json/close/{info['id']}", timeout=8)
+            for it in links[:15]:
+                title = it["title"]
+                tl = title.lower()
+                if (not kw or any(w in tl for w in kw)
+                        or "ai" in tl.split() or "artificial" in tl):
+                    out.append({"url": it["url"], "title": title, "source": cfg["domain"],
+                                "published": "", "via": "section"})
+            _t.sleep(0.5)
+        except Exception as e:
+            print(f"[section_discover] {sec} fail: {e}")
+            continue
+    # 去重
+    seen, uniq = set(), []
+    for a in out:
+        k = a["url"]
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(a)
+    return uniq
 
 
 def discover(topic: str, domain: str, since_days: int = 365, decode=None) -> list[dict]:

@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from cdp_fetch import fetch, extract_readability, http_json
-from discover import bing_news
+from discover import bing_news, section_discover
 
 ROOT = Path(__file__).parent
 STORE = ROOT / "web_store"
@@ -122,6 +122,9 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     data.setdefault("errors", []).append(f"未知媒体 {outlet_name}")
                     continue
                 arts = bing_news(topic, cfg["domain"], since_days=days)[: max(per * 3, 8)]
+                if len(arts) < per and cfg.get("sections"):
+                    # bing 不收录的站 (bjreview 等): 走栏目列表页发现
+                    arts += section_discover(topic, cfg, cdp_host=CDP_HOST)
                 got_this = 0
                 for a in arts:
                     if got_this >= per or done_n >= total:
@@ -176,6 +179,7 @@ OUTLET_LABELS = {
     "wired": "Wired", "cnbc": "CNBC", "npr": "NPR", "vox": "Vox",
     "arstechnica": "Ars Technica",
     "economist": "经济学人", "nytimes": "纽约时报",
+    "chinadaily": "中国日报", "bjreview": "北京周报",
 }
 
 
