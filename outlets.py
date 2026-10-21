@@ -30,6 +30,7 @@ OUTLETS = {
     # ---- 2026-10-20 起经真实浏览器 CDP 验证可用 ----
     "economist":   {"domain": "economist.com",      "tier": "mirror",  "enabled": True,
                     "mirror": "https://freedium-mirror.cfd/"},   # freedium 免费镜像拿全文
+    "discover":    {"domain": "discovermagazine.com","tier": "metered", "enabled": True},  # 《发现》杂志, CDP拿全文
     "nytimes":     {"domain": "nytimes.com",        "tier": "metered", "enabled": True},
     "wsj":         {"domain": "wsj.com",            "tier": "hard",    "enabled": False},
     "hbr":         {"domain": "hbr.org",            "tier": "hard",    "enabled": False},

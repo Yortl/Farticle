@@ -185,7 +185,7 @@ OUTLET_LABELS = {
     "psychtoday": "今日心理学", "natgeo": "国家地理",
     "wired": "Wired", "cnbc": "CNBC", "npr": "NPR", "vox": "Vox",
     "arstechnica": "Ars Technica",
-    "economist": "经济学人", "nytimes": "纽约时报",
+    "economist": "经济学人", "nytimes": "纽约时报", "discover": "发现杂志",
     "chinadaily": "中国日报", "bjreview": "北京周报",
 }
 

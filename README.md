@@ -2,14 +2,14 @@
 
 外刊文章抓取与阅读系统 — 面向四六级/考研英语阅读素材建设。
 
-按话题从 19 个国际媒体源批量抓取纯净 Markdown 正文, 内置 Web 界面阅读管理。
+按话题从 20 个国际媒体源批量抓取纯净 Markdown 正文, 内置 Web 界面阅读管理。
 
 ## 三条抓取通道
 
 | 通道 | 适用 | 说明 |
 |---|---|---|
 | **免费直抓** | Guardian / BBC / NPR / Vox / Wired / CNBC / SciAm / Time / Newsweek / NatGeo / Ars Technica / Psychology Today / 中国日报 / 北京周报 | Bing News 发现 → 直接抓 |
-| **真实浏览器 CDP** | Atlantic / WaPo / NYT | 经局域网 Chrome (装 BPC 插件) 解付费墙; 自动处理 Cloudflare Turnstile / GDPR consent / interstitial |
+| **真实浏览器 CDP** | Atlantic / WaPo / NYT / Discover | 经局域网 Chrome (装 BPC 插件) 解付费墙; 自动处理 Cloudflare Turnstile / GDPR consent / interstitial |
 | **镜像通道** | Economist | freedium-mirror 全文镜像 (BPC 原文页只解摘要) |
 
 另有 `economist_epub.py`: 每周从 awesome-english-ebooks 拉整刊 epub → 逐篇转 Markdown。
