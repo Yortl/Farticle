@@ -27,6 +27,8 @@ from pydantic import BaseModel
 
 from cdp_fetch import fetch, extract_readability, http_json
 from discover import bing_news, section_discover
+import htmldate
+import trafilatura
 
 ROOT = Path(__file__).parent
 STORE = ROOT / "web_store"
@@ -51,14 +53,46 @@ def ok_words(n: int, lo: int | None, hi: int | None) -> bool:
     return True if lo is None or hi is None else lo <= n <= hi
 
 
-def save_article(title: str, source: str, url: str, words: int, text: str) -> tuple[str, bool]:
+def extract_date(html: str, url: str = "", fallback: str = "") -> str:
+    """提取文章发布日期, 统一返回 YYYY-MM-DD 或空字符串。"""
+    if html:
+        try:
+            d = htmldate.find_date(html, url=url, original_date=True)
+            if d and re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+                return d
+        except Exception:
+            pass
+        try:
+            meta = trafilatura.extract_metadata(html)
+            if meta and meta.date and re.match(r"^\d{4}-\d{2}-\d{2}$", meta.date):
+                return meta.date
+        except Exception:
+            pass
+    if fallback:
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", fallback)
+        if m:
+            return m.group(1)
+    if url:
+        m = re.search(r"/(20\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])", url)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+        _months = {"jan":"01","feb":"02","mar":"03","apr":"04","may":"05","jun":"06",
+                   "jul":"07","aug":"08","sep":"09","oct":"10","nov":"11","dec":"12"}
+        m2 = re.search(r"/(20\d{2})/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/(\d{1,2})", url.lower())
+        if m2:
+            return f"{m2.group(1)}-{_months[m2.group(2)]}-{int(m2.group(3)):02d}"
+    return ""
+
+
+def save_article(title: str, source: str, url: str, words: int, text: str, pub_date: str = "") -> tuple[str, bool]:
     """按 url 幂等: 已抓过直接复用 (多源/重跑防重复)。返回 (id, 是否本次新入库)"""
     for f in ART.glob("*.md"):
         if f"\nurl: {url}\n" in f.read_text(encoding="utf-8"):
             return f.stem, False
     aid = uuid.uuid4().hex[:10]
+    date_line = f"date: {pub_date}\n" if pub_date else ""
     fm = (f"---\nid: {aid}\ntitle: {fm_escape(title)}\nsource: {source}\nurl: {url}\n"
-          f"words: {words}\nfetched: {time.strftime('%Y-%m-%d %H:%M')}\n---\n\n")
+          f"words: {words}\n{date_line}fetched: {time.strftime('%Y-%m-%d %H:%M')}\n---\n\n")
     (ART / f"{aid}.md").write_text(fm + text + "\n", encoding="utf-8")
     return aid, True
 
@@ -70,6 +104,10 @@ def load_article(aid: str) -> dict | None:
     raw = f.read_text(encoding="utf-8")
     m = re.match(r"---\n(.*?)\n---\n\n(.*)", raw, re.S)
     meta = dict(re.findall(r"^(\w+): (.*)$", m.group(1), re.M)) if m else {}
+    if "date" not in meta and "url" in meta:
+        d = extract_date("", url=meta["url"])
+        if d:
+            meta["date"] = d
     return {**meta, "id": aid, "body": m.group(2) if m else raw}
 
 
@@ -97,15 +135,16 @@ def slugify(s: str, maxlen: int = 60) -> str:
 
 
 def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "", per: int = 3, days: int = 30,
-             min_words: int | None = None, max_words: int | None = None):
+             min_words: int | None = None, max_words: int | None = None, pub_year: int | None = None):
     data = job_read(jid)
     try:
         if kind == "fetch":
-            text, title = "", ""
+            text, title, pub_date = "", "", ""
             # 两次尝试: 第1次可能只抓到 consent 弹窗层 (点了但正文未渲染), 第2次 cookie 已存
             for attempt in range(2):
                 html, title = fetch(CDP_HOST, url, wait_s=18)
                 text = extract_readability(html) or ""
+                pub_date = extract_date(html, url=url)
                 if ok_words(len(text.split()), min_words, max_words):
                     break
                 time.sleep(3)
@@ -114,9 +153,13 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                 raise RuntimeError(f"正文仅 {words} 词, 可能被墙/BPC未生效 (看浏览器 tab)")
             if not ok_words(words, min_words, max_words):
                 raise RuntimeError(f"正文 {words} 词, 不在设定范围 [{min_words}, {max_words}]")
+            if pub_year is not None:
+                art_year = int(pub_date[:4]) if (pub_date and len(pub_date) >= 4 and pub_date[:4].isdigit()) else None
+                if art_year != pub_year:
+                    raise RuntimeError(f"文章发布年份为 {art_year or '未知'}, 不符合限定年份 {pub_year}")
             title = title[:140] or url
-            aid, _is_new = save_article(title, url.split("/")[2] if "//" in url else url, url, words, text)
-            data.update(status="done", articles=[{"id": aid, "title": title, "words": words}])
+            aid, _is_new = save_article(title, url.split("/")[2] if "//" in url else url, url, words, text, pub_date=pub_date)
+            data.update(status="done", articles=[{"id": aid, "title": title, "words": words, "date": pub_date}])
         else:  # discover: 多源; per 指该源最终入库篇数 (已在库的也计数, 标注已存在)
             got, seen_titles, seen_urls, existing = [], set(), set(), 0
             outlets = [o.strip() for o in outlet.split(",") if o.strip()]
@@ -127,7 +170,12 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     data.setdefault("errors", []).append(f"未知媒体 {outlet_name}")
                     continue
                 # 不截断候选池: 过短的候选 (World in Brief 等) 会消耗名额, 截断后凑不够 per 篇
-                arts = bing_news(topic, cfg["domain"], since_days=days)
+                effective_days = days
+                if pub_year is not None:
+                    cur_year = time.localtime().tm_year
+                    if pub_year < cur_year:
+                        effective_days = max(days, (cur_year - pub_year + 1) * 365 + 30)
+                arts = bing_news(topic, cfg["domain"], since_days=effective_days)
                 if len(arts) < per and cfg.get("sections"):
                     # bing 不收录的站 (bjreview 等): 走栏目列表页发现
                     arts += section_discover(topic, cfg, cdp_host=CDP_HOST)
@@ -147,10 +195,11 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     try:
                         # freedium 镜像源 (economist): 原文页只有摘要, 用镜像拿全文
                         target = (cfg.get("mirror", "") + a["url"]) if cfg.get("mirror") else a["url"]
-                        text, ptitle = "", ""
+                        text, ptitle, pub_date = "", "", ""
                         for attempt in range(2):
                             html, ptitle = fetch(CDP_HOST, target, wait_s=15)
                             text = extract_readability(html) or ""
+                            pub_date = extract_date(html, url=a["url"], fallback=a.get("published", ""))
                             if ok_words(len(text.split()), min_words, max_words):
                                 break
                             time.sleep(3)
@@ -160,9 +209,15 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                                    "不在词数范围" if (min_words is not None and max_words is not None) else "过短")
                             data.setdefault("skipped", []).append(f"{outlet_name} ({words}词{why}): {a['title'][:45]}")
                             continue
-                        aid, is_new = save_article(ptitle or a["title"], cfg["domain"], a["url"], words, text)
+                        if pub_year is not None:
+                            art_year = int(pub_date[:4]) if (pub_date and len(pub_date) >= 4 and pub_date[:4].isdigit()) else None
+                            if art_year != pub_year:
+                                why = f"{art_year}年非{pub_year}" if art_year else "无发布年份"
+                                data.setdefault("skipped", []).append(f"{outlet_name} ({why}): {a['title'][:45]}")
+                                continue
+                        aid, is_new = save_article(ptitle or a["title"], cfg["domain"], a["url"], words, text, pub_date=pub_date)
                         got.append({"id": aid, "outlet": outlet_name, "title": a["title"],
-                                    "words": words, "url": a["url"], "new": is_new})
+                                    "words": words, "date": pub_date, "url": a["url"], "new": is_new})
                         seen_titles.add(tok)
                         got_this += 1  # 已在库的也计入: per = 该源最终入库篇数
                         existing += 0 if is_new else 1
@@ -199,6 +254,7 @@ def api_outlets():
 
 class FetchReq(BaseModel):
     url: str
+    pub_year: int | None = None
 
 
 class DiscoverReq(BaseModel):
@@ -208,6 +264,7 @@ class DiscoverReq(BaseModel):
     days: int = 30
     min_words: int | None = None   # None = 不限定词数范围
     max_words: int | None = None
+    pub_year: int | None = None    # None = 不限定年份
 
 
 @app.get("/api/health")
@@ -223,9 +280,11 @@ def health():
 def api_fetch(req: FetchReq):
     jid = uuid.uuid4().hex[:8]
     data = {"id": jid, "kind": "fetch", "status": "running", "url": req.url,
+            "pub_year": req.pub_year,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"), "articles": []}
     job_write(jid, data)
-    threading.Thread(target=run_job, args=(jid, "fetch", req.url), daemon=True).start()
+    threading.Thread(target=run_job, args=(jid, "fetch", req.url),
+                     kwargs={"pub_year": req.pub_year}, daemon=True).start()
     return data
 
 
@@ -235,12 +294,13 @@ def api_discover(req: DiscoverReq):
     data = {"id": jid, "kind": "discover", "status": "running", "topic": req.topic,
             "outlets": req.outlets, "per_outlet": req.per_outlet,
             "min_words": req.min_words, "max_words": req.max_words,
+            "pub_year": req.pub_year,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "articles": [], "progress": "searching..."}
     job_write(jid, data)
     threading.Thread(target=run_job,
                      args=(jid, "discover", "", req.topic, ",".join(req.outlets), req.per_outlet,
-                           req.days, req.min_words, req.max_words),
+                           req.days, req.min_words, req.max_words, req.pub_year),
                      daemon=True).start()
     return data
 

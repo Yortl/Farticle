@@ -22,7 +22,7 @@ server.OUTLETS = {"economist": {"domain": "economist.com", "tier": "mirror", "en
                                 "mirror": "https://mirror/"}}
 # 前 2 篇已在库: 仍应计满 per=2, 第 3 篇不再抓
 existing_ids = {"https://economist.com/0": "a0", "https://economist.com/1": "a1"}
-server.save_article = lambda title, source, url, words, text: (
+server.save_article = lambda title, source, url, words, text, pub_date="": (
     (existing_ids[url], False) if url in existing_ids else ("new" + url[-1], True))
 jobs = {}
 server.job_write = lambda jid, d: jobs.__setitem__(jid, dict(d))
@@ -56,9 +56,28 @@ def _fetch(host, url, wait_s=15):
 server.fetch = _fetch
 server.extract_readability = lambda html: "word " * (200 if "economist.com/0" in html else 800)
 got = {}
-server.save_article = lambda title, source, url, words, text: got.__setitem__(words, url) or ("x", True)
+server.save_article = lambda title, source, url, words, text, pub_date="": got.__setitem__(words, url) or ("x", True)
 server.run_job("j3", "discover", topic="x", outlet="economist", per=1, days=30,
                min_words=400, max_words=1200)
 assert jobs["j3"]["skipped"], jobs["j3"]          # 200 词被跳过
 assert 800 in got, got                            # 继续抓到合格的 800 词
+
+# --- 测试 extract_date & pub_year 年份过滤 ---
+assert server.extract_date("", fallback="2026-10-07T08:00:00Z") == "2026-10-07"
+assert server.extract_date("", url="https://theguardian.com/2026/oct/21/test") == "2026-10-21"
+assert server.extract_date("", url="https://economist.com/2025/11/02/test") == "2025-11-02"
+
+# 勾选限定年份 2026: 2025 年跳过, 2026 年入库
+server.bing_news = lambda topic, domain, since_days: [
+    {"url": "https://economist.com/2025/01/15/old", "title": "Old Article"},
+    {"url": "https://economist.com/2026/05/20/new", "title": "New Article"},
+]
+server.extract_readability = lambda html: "word " * 500
+got_dates = []
+server.save_article = lambda title, source, url, words, text, pub_date="": got_dates.append(pub_date) or ("x", True)
+server.run_job("j4", "discover", topic="x", outlet="economist", per=1, days=30, pub_year=2026)
+assert len(jobs["j4"]["articles"]) == 1
+assert jobs["j4"]["articles"][0]["date"] == "2026-05-20"
+assert any("2025" in s for s in jobs["j4"].get("skipped", []))
+
 print("test_quota: all ok")
