@@ -266,6 +266,26 @@ def api_article(aid: str):
     return a
 
 
+class SaveReq(BaseModel):
+    body: str
+
+
+@app.put("/api/articles/{aid}")
+def api_save(aid: str, req: SaveReq):
+    """编辑保存: 写回正文并同步 front matter 的词数"""
+    f = ART / f"{aid}.md"
+    if not f.exists():
+        raise HTTPException(404)
+    raw = f.read_text(encoding="utf-8")
+    m = re.match(r"---\n(.*?)\n---\n\n(.*)", raw, re.S)
+    if not m:
+        raise HTTPException(400, "格式异常")
+    words = len(req.body.split())
+    fm = re.sub(r"^words: .*$", f"words: {words}", m.group(1), flags=re.M)
+    f.write_text(f"---\n{fm}\n---\n\n{req.body}\n", encoding="utf-8")
+    return {"id": aid, "words": words}
+
+
 @app.delete("/api/articles/{aid}")
 def api_del(aid: str):
     f = ART / f"{aid}.md"

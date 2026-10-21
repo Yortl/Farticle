@@ -95,6 +95,15 @@ button:disabled { opacity: .45; cursor: default; }
 .reader-body li { margin-bottom: .4em; }
 .reader-body hr { border: 0; border-top: 1px solid var(--line); margin: 2em auto; width: 40%; }
 .reader-body a { color: var(--accent); }
+.reader-toolbar { display: flex; gap: 8px; justify-content: flex-end; margin: -16px 0 24px; }
+.reader-body.editing { display: none; }
+#r-editor { display: none; width: 100%; height: 58vh; resize: vertical;
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px;
+  background: #fff; color: var(--ink);
+  font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+#r-editor.on { display: block; }
+#r-editor:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.reader-toolbar button { padding: 3px 14px; font-size: 12.5px; }
 .close-x { position: sticky; top: 0; float: right; background: none; border: 0;
   font-size: 26px; color: var(--sub); cursor: pointer; line-height: 1; padding: 4px; z-index: 5; }
 .close-x:hover { color: var(--ink); }
@@ -139,6 +148,12 @@ button:disabled { opacity: .45; cursor: default; }
   <div class="reader-kicker" id="r-kicker"></div>
   <h2 id="r-title"></h2>
   <div class="reader-meta" id="r-meta"></div>
+  <div class="reader-toolbar">
+    <button class="ghost" id="r-edit" onclick="toggleEdit(true)">编辑</button>
+    <button id="r-save" onclick="saveEdit()" style="display:none">保存</button>
+    <button class="ghost" id="r-cancel" onclick="toggleEdit(false)" style="display:none">取消</button>
+  </div>
+  <textarea id="r-editor" spellcheck="false"></textarea>
   <div class="reader-body" id="r-body"></div>
 </div></div>
 
@@ -311,7 +326,11 @@ async function loadList() {
 
 function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
 
+let curAid = null;  // 当前阅读的文章 id (编辑保存用)
+
 async function openReader(aid) {
+  curAid = aid;
+  toggleEdit(false);  // 上次编辑状态不复位会串到下一篇
   const a = await (await fetch(`/api/articles/${aid}`)).json();
   const body = cleanBody(a.body||"");
   document.getElementById("r-kicker").textContent = a.source || "";
@@ -320,8 +339,25 @@ async function openReader(aid) {
     `<span class="badge">${esc(a.source)}</span> ${a.words} 词 · ${esc(a.fetched)} ·
      <a href="${esc(a.url)}" target="_blank">原文 ↗</a>`;
   document.getElementById("r-body").innerHTML = md2html(body);
-  document.querySelector(".reader-card").scrollTop = 0;
   document.getElementById("reader").classList.add("on");
+  document.querySelector(".reader-card").scrollTop = 0;  // 必须在显示后: 隐藏元素无布局, 赋值无效
+}
+function toggleEdit(on) {
+  document.getElementById("r-body").classList.toggle("editing", on);
+  document.getElementById("r-editor").classList.toggle("on", on);
+  document.getElementById("r-edit").style.display = on ? "none" : "";
+  document.getElementById("r-save").style.display = on ? "" : "none";
+  document.getElementById("r-cancel").style.display = on ? "" : "none";
+  if (on) fetch(`/api/articles/${curAid}`).then(r => r.json())
+    .then(a => { document.getElementById("r-editor").value = a.body||""; });
+}
+async function saveEdit() {
+  const text = document.getElementById("r-editor").value;
+  const r = await fetch(`/api/articles/${curAid}`, {method:"PUT",
+    headers:{"Content-Type":"application/json"}, body: JSON.stringify({body: text})});
+  if (!r.ok) return alert("保存失败");
+  await openReader(curAid);  // 重新渲染 + 词数从返回值刷新
+  loadList();  // 列表里的词数同步
 }
 function closeReader(){ document.getElementById("reader").classList.remove("on"); }
 document.getElementById("reader").addEventListener("click", e => {
