@@ -177,16 +177,24 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     if pub_year < cur_year:
                         effective_days = max(days, (cur_year - pub_year + 1) * 365 + 30)
                 arts = discover(topic, cfg["domain"], since_days=effective_days,
-                                decode=load_decoder())
+                                cdp_host=CDP_HOST)
                 data["progress"] = f"[{outlet_name}] 候选 {len(arts)} 篇"
                 job_write(jid, data)
                 if len(arts) < per and cfg.get("sections"):
                     # 站内搜索/Bing 都不收录的站 (bjreview 等): 走栏目列表页发现
                     arts += section_discover(topic, cfg, cdp_host=CDP_HOST)
                 got_this = 0
+                dec = load_decoder()
                 for a in arts:
                     if got_this >= per:
                         break
+                    # GN 包装链接懒解码: 只解真正要抓的, 省掉整池解码的分钟级等待
+                    if not a["url"] and a.get("_gn"):
+                        a["url"] = (dec(a["_gn"]) or "") if dec else ""
+                    if not a["url"]:
+                        data.setdefault("skipped", []).append(
+                            f"{outlet_name} (GN解码失败): {a['title'][:45]}")
+                        continue
                     if a["url"] in seen_urls:  # 本轮已试过 (含失败), 不重复消耗配额
                         continue
                     tok = re.sub(r"[^\w]+", " ", a["title"].lower()).strip()
@@ -300,7 +308,7 @@ def api_discover(req: DiscoverReq):
             "min_words": req.min_words, "max_words": req.max_words,
             "pub_year": req.pub_year,
             "created": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "articles": [], "progress": "searching..."}
+            "articles": [], "skipped": [], "progress": "searching..."}
     job_write(jid, data)
     threading.Thread(target=run_job,
                      args=(jid, "discover", "", req.topic, ",".join(req.outlets), req.per_outlet,

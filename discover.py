@@ -57,10 +57,10 @@ def bing_news(topic: str, domain: str, since_days: int):
         })
     return out
 
-def google_news_paged(topic: str, domain: str, since_days: int, decode=None) -> list[dict]:
-    """GN RSS: 链接是 news.google.com 包装的, 由调用方 CDP 解码 (解不出只记标题)。
-    单次查询封顶 100 条; 按月切片绕开上限 (yellowstone@discover 2025: 整年86 -> 月度和1088)。
-    切片数 = ceil(since_days/30), 封顶 48 个月。"""
+def google_news_paged(topic: str, domain: str, since_days: int) -> list[dict]:
+    """GN RSS: 链接是 news.google.com 包装的, 存 _gn 由调用方懒解码 (CDP cdp_decode);
+    解不出只记标题。单次查询封顶 100 条; 按月切片绕开上限
+    (yellowstone@discover 2025: 整年86 -> 月度和1088)。切片数 = ceil(since_days/30), 封顶 48 个月。"""
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=since_days)
     months = min(max((since_days + 29) // 30, 1), 48)
@@ -88,7 +88,8 @@ def google_news_paged(topic: str, domain: str, since_days: int, decode=None) -> 
             if pub and pub < start:
                 continue
             items.append({
-                "url": link if link.startswith("https://news.google.com/") else link,
+                "url": "" if link.startswith("https://news.google.com/") else link,
+                "_gn": link if link.startswith("https://news.google.com/") else "",
                 "title": title,
                 "source": domain,
                 "published": pub.isoformat() if pub else "",
@@ -156,29 +157,71 @@ def section_discover(topic: str, cfg: dict, cdp_host: str = "127.0.0.1:9222") ->
 
 
 # 站内搜索适配器: 命中源站自己的搜索引擎, 结果最全 (discover yellowstone: 302 条精确)。
-# 每站一个函数(topic, domain, since_days) -> [{url,title,source,published,via:'site_search'}]
+# 每站一个函数(topic, domain, since_days, cdp_host) -> [{url,title,source,published,via:'site_search'}]
 _SITE_SEARCH = {
     "discovermagazine.com": "site_search_discover",
+    "economist.com": "site_search_economist",
 }
 
 
-def site_search(topic: str, domain: str, since_days: int = 365) -> list[dict]:
+def site_search(topic: str, domain: str, since_days: int = 365,
+                cdp_host: str = "127.0.0.1:9222") -> list[dict]:
     fn_name = _SITE_SEARCH.get(domain)
     if not fn_name:
         return []
     try:
         import site_search as _ss
-        return getattr(_ss, fn_name)(topic, domain, since_days)
+        fn = getattr(_ss, fn_name)
+        if fn.__code__.co_argcount >= 4 or "cdp_host" in fn.__code__.co_varnames:
+            return fn(topic, domain, since_days, cdp_host=cdp_host)
+        return fn(topic, domain, since_days)
     except Exception:
         return []
 
 
-def discover(topic: str, domain: str, since_days: int = 365, decode=None) -> list[dict]:
+def cdp_decode(cdp_host: str = "127.0.0.1:9222"):
+    """GN 包装链接 CDP 解码器: 开 tab 等 302 → location.href 即真实 URL。
+    googlenewsdecoder 包对新编码 (AU_yqL) 已失效 (实测 2026-10), 此为正解。
+    单条失败返回 None, 不弃用。"""
+    import json as _json
+    import urllib.request as _u
+    from cdp_fetch import Tab
+
+    def dec(link: str) -> str | None:
+        if not link.startswith("https://news.google.com/"):
+            return link
+        tab = None
+        info = {}
+        try:
+            q = urllib.parse.quote(link, safe="")
+            req = _u.Request(f"http://{cdp_host}/json/new?{q}", method="PUT")
+            info = _json.loads(_u.urlopen(req, timeout=15).read())
+            tab = Tab(info["webSocketDebuggerUrl"])
+            time.sleep(4)
+            real = tab.eval_js("location.href") or ""
+            if "news.google.com" in real:
+                time.sleep(3)
+                real = tab.eval_js("location.href") or ""
+            return real if not real.startswith("https://news.google.com/") else None
+        except Exception:
+            return None
+        finally:
+            if tab:
+                try:
+                    tab.close()
+                    _u.urlopen(f"http://{cdp_host}/json/close/{info['id']}", timeout=8)
+                except Exception:
+                    pass
+    return dec
+
+
+def discover(topic: str, domain: str, since_days: int = 365, decode=None,
+             cdp_host: str = "127.0.0.1:9222") -> list[dict]:
     """三通道发现: 站内搜索(最全) + Bing News(真实直链) + GN 按月切片(覆盖兜底)。
-    标题归一化去重; GN 包装链接经 decode() 解码, 解不出只记标题。"""
+    标题归一化去重; GN 包装链接存 _gn 待懒解码 (decode()=cdp_decode 注入时立即批量解)。"""
     items = []
     known_tokens: set = set()
-    for art in site_search(topic, domain, since_days):
+    for art in site_search(topic, domain, since_days, cdp_host=cdp_host):
         known_tokens.add(_gn_token(art["title"]))
         items.append(art)
         time.sleep(0.2)
@@ -186,11 +229,11 @@ def discover(topic: str, domain: str, since_days: int = 365, decode=None) -> lis
         known_tokens.add(_gn_token(art["title"]))
         items.append(art)
         time.sleep(0.2)
-    for art in google_news_paged(topic, domain, since_days, decode=decode):
+    for art in google_news_paged(topic, domain, since_days):
         art["_tok"] = _gn_token(art["title"])
         items.append(art)
         time.sleep(0.2)
-    # GN 解码失败的条目 (无真实URL): 对应文章站内搜索/Bing 已收录的丢弃, 剩下的才保留为标题线索
+    # GN 解码失败的条目 (无真实URL): 对应文章站内搜索/Bing 已收录的丢弃, 剩下的保留待解
     items = [a for a in items if a.get("via") != "google_news_paged"
              or a["url"] or a["_tok"] not in known_tokens]
     # 按 URL 去重 (同一篇被两家索引)

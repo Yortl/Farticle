@@ -27,22 +27,12 @@ def slugify(s: str, maxlen: int = 60) -> str:
 
 
 def load_decoder():
-    """GN 链接解码器; 连续 3 次失败即弃用 (解码挂了只会白等)。"""
+    """GN 链接解码器: CDP 真实浏览器 302 落地 (googlenewsdecoder 包对新编码已失效)。"""
     try:
-        from googlenewsdecoder import gnewsdecoder
+        from discover import cdp_decode
+        return cdp_decode()
     except ImportError:
         return None
-    fails = {"n": 0}
-
-    def dec(link):
-        if fails["n"] >= 3:
-            raise RuntimeError("gn decoder disabled after repeated failures")
-        r = gnewsdecoder(link, interval=1)
-        if not (isinstance(r, dict) and r.get("success")):
-            fails["n"] += 1
-        return r
-
-    return dec
 
 
 def main():
