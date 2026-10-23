@@ -26,7 +26,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from cdp_fetch import fetch, extract_readability, http_json
-from discover import bing_news, section_discover
+from discover import discover, section_discover
+from run import load_decoder
 import htmldate
 import trafilatura
 
@@ -169,15 +170,18 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                 if not cfg:
                     data.setdefault("errors", []).append(f"未知媒体 {outlet_name}")
                     continue
-                # 不截断候选池: 过短的候选 (World in Brief 等) 会消耗名额, 截断后凑不够 per 篇
+                # 三通道发现 (站内搜索最全 + Bing + GN 月度切片), 不截断候选池
                 effective_days = days
                 if pub_year is not None:
                     cur_year = time.localtime().tm_year
                     if pub_year < cur_year:
                         effective_days = max(days, (cur_year - pub_year + 1) * 365 + 30)
-                arts = bing_news(topic, cfg["domain"], since_days=effective_days)
+                arts = discover(topic, cfg["domain"], since_days=effective_days,
+                                decode=load_decoder())
+                data["progress"] = f"[{outlet_name}] 候选 {len(arts)} 篇"
+                job_write(jid, data)
                 if len(arts) < per and cfg.get("sections"):
-                    # bing 不收录的站 (bjreview 等): 走栏目列表页发现
+                    # 站内搜索/Bing 都不收录的站 (bjreview 等): 走栏目列表页发现
                     arts += section_discover(topic, cfg, cdp_host=CDP_HOST)
                 got_this = 0
                 for a in arts:

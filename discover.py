@@ -57,44 +57,46 @@ def bing_news(topic: str, domain: str, since_days: int):
         })
     return out
 
-def google_news(topic: str, domain: str, since_days: int, decode=None, gotitles: set | None = None):
-    """Google News RSS: 标题/日期更全, 但链接是 news.google.com 包装的,
-    decode() 由可选的 gnews-decoder 包提供, 解不出来时只记录标题占位。"""
-    q = f'"{topic}" site:{domain}'
-    url = "https://news.google.com/rss/search?" + urllib.parse.urlencode(
-        {"q": q, "hl": "en-US", "gl": "US", "ceid": "US:en"})
-    out = []
-    try:
-        root = _rss(url)
-    except Exception:
-        return out
-    cutoff = datetime.now(timezone.utc) - timedelta(days=since_days)
-    for it in root.findall(".//item"):
-        title = (it.findtext("title") or "").strip()
-        link = it.findtext("link") or ""
+def google_news_paged(topic: str, domain: str, since_days: int, decode=None) -> list[dict]:
+    """GN RSS: 链接是 news.google.com 包装的, 由调用方 CDP 解码 (解不出只记标题)。
+    单次查询封顶 100 条; 按月切片绕开上限 (yellowstone@discover 2025: 整年86 -> 月度和1088)。
+    切片数 = ceil(since_days/30), 封顶 48 个月。"""
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=since_days)
+    months = min(max((since_days + 29) // 30, 1), 48)
+    items = []
+    for i in range(months):
+        lo = start + timedelta(days=30 * i)
+        hi = min(lo + timedelta(days=30), end + timedelta(days=1))
+        if lo >= end:
+            break
+        q = (f"{topic} site:{domain} "
+             f"after:{lo.strftime('%Y-%m-%d')} before:{hi.strftime('%Y-%m-%d')}")
+        url = "https://news.google.com/rss/search?" + urllib.parse.urlencode(
+            {"q": q, "hl": "en-US", "gl": "US", "ceid": "US:en"})
         try:
-            pub = parsedate_to_datetime(it.findtext("pubDate"))
+            root = _rss(url)
         except Exception:
-            pub = None
-        if pub and pub < cutoff:
             continue
-        real = None
-        if decode is not None and link.startswith("https://news.google.com/"):
+        for it in root.findall(".//item"):
+            title = (it.findtext("title") or "").strip()
+            link = it.findtext("link") or ""
             try:
-                r = decode(link)
-                real = (r.get("url") if isinstance(r, dict) else r) or None
+                pub = parsedate_to_datetime(it.findtext("pubDate"))
             except Exception:
-                real = None
-        if real and gotitles is not None and title in gotitles:
-            continue  # 与 Bing 结果重复
-        out.append({
-            "url": real or "",
-            "title": title,
-            "source": domain,
-            "published": pub.isoformat() if pub else "",
-            "via": "google_news" + ("" if real else "_unresolved"),
-        })
-    return out
+                pub = None
+            if pub and pub < start:
+                continue
+            items.append({
+                "url": link if link.startswith("https://news.google.com/") else link,
+                "title": title,
+                "source": domain,
+                "published": pub.isoformat() if pub else "",
+                "via": "google_news_paged",
+            })
+        time.sleep(0.3)
+    return items
+
 
 def _gn_token(title: str) -> str:
     """GN 标题带 ' - The Guardian' 后缀, 去掉后归一化, 用于和 Bing 结果对齐。"""
@@ -153,19 +155,44 @@ def section_discover(topic: str, cfg: dict, cdp_host: str = "127.0.0.1:9222") ->
     return uniq
 
 
+# 站内搜索适配器: 命中源站自己的搜索引擎, 结果最全 (discover yellowstone: 302 条精确)。
+# 每站一个函数(topic, domain, since_days) -> [{url,title,source,published,via:'site_search'}]
+_SITE_SEARCH = {
+    "discovermagazine.com": "site_search_discover",
+}
+
+
+def site_search(topic: str, domain: str, since_days: int = 365) -> list[dict]:
+    fn_name = _SITE_SEARCH.get(domain)
+    if not fn_name:
+        return []
+    try:
+        import site_search as _ss
+        return getattr(_ss, fn_name)(topic, domain, since_days)
+    except Exception:
+        return []
+
+
 def discover(topic: str, domain: str, since_days: int = 365, decode=None) -> list[dict]:
+    """三通道发现: 站内搜索(最全) + Bing News(真实直链) + GN 按月切片(覆盖兜底)。
+    标题归一化去重; GN 包装链接经 decode() 解码, 解不出只记标题。"""
     items = []
-    bing_tokens: set = set()
-    for art in bing_news(topic, domain, since_days):
-        bing_tokens.add(_gn_token(art["title"]))
+    known_tokens: set = set()
+    for art in site_search(topic, domain, since_days):
+        known_tokens.add(_gn_token(art["title"]))
         items.append(art)
         time.sleep(0.2)
-    for art in google_news(topic, domain, since_days, decode=decode, gotitles=bing_tokens):
+    for art in bing_news(topic, domain, since_days):
+        known_tokens.add(_gn_token(art["title"]))
+        items.append(art)
+        time.sleep(0.2)
+    for art in google_news_paged(topic, domain, since_days, decode=decode):
         art["_tok"] = _gn_token(art["title"])
         items.append(art)
         time.sleep(0.2)
-    # GN 解码失败的条目 (无真实URL): 对应文章 Bing 已收录的丢弃, 剩下的才保留为标题线索
-    items = [a for a in items if a.get("via") != "google_news_unresolved" or a["_tok"] not in bing_tokens]
+    # GN 解码失败的条目 (无真实URL): 对应文章站内搜索/Bing 已收录的丢弃, 剩下的才保留为标题线索
+    items = [a for a in items if a.get("via") != "google_news_paged"
+             or a["url"] or a["_tok"] not in known_tokens]
     # 按 URL 去重 (同一篇被两家索引)
     seen, uniq = set(), []
     for a in items:
