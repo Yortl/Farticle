@@ -201,6 +201,16 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     if tok and tok in seen_titles:
                         continue
                     seen_urls.add(a["url"])
+                    # 年份预过滤 (抓取前零成本排除): URL 内嵌年份 > discover 的 published 字段 > 无则放行留给抓后判断
+                    if pub_year is not None:
+                        pub_s = a.get("published") or ""
+                        ym = re.search(r"/(20\d{2})[/-]", a["url"])
+                        pre_year = int(ym.group(1)) if ym else (
+                            int(pub_s[:4]) if pub_s[:4].isdigit() else None)
+                        if pre_year is not None and pre_year != pub_year:
+                            data.setdefault("skipped", []).append(
+                                f"{outlet_name} ({pre_year}年非{pub_year}): {a['title'][:45]}")
+                            continue
                     data["status"] = "running"
                     data["progress"] = f"[{outlet_name}] {got_this+1}/{per}: {a['title'][:55]}"
                     job_write(jid, data)
