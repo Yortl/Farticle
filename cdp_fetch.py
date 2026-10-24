@@ -162,8 +162,17 @@ def _click_consent(tab) -> bool:
     try:
         btn = tab.eval_js("""
             (() => {
-              const b = [...document.querySelectorAll('button')].find(x =>
-                /^(reject all|i accept|accept all|同意|拒绝全部)$/i.test((x.textContent||'').trim()));
+              const vis = x => { const r = x.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+              const els = [
+                document.getElementById('onetrust-reject-all-handler'),
+                document.getElementById('onetrust-reject-btn-handler'),
+                document.getElementById('onetrust-accept-btn-handler'),
+                ...[...document.querySelectorAll('button')].filter(x =>
+                  /^(reject all|accept all( cookies)?|i accept|同意|拒绝全部)$/i.test((x.textContent||'').trim()))
+              ].filter(x => x && vis(x));
+              // 优先 Reject (隐私友好), 无则 Accept
+              const b = els.find(x => /reject|拒绝/i.test(x.textContent || x.id))
+                      || els.find(x => /accept|同意/i.test(x.textContent || x.id));
               if (!b) return null;
               const r = b.getBoundingClientRect();
               return {x: r.x + r.width/2, y: r.y + r.height/2};
@@ -327,8 +336,10 @@ def _clean_lines(paras: list[str]) -> list[str]:
         if re.match(r"^(we (will also use other |and our partners )|click 'got it' |"
                     r"you can (control how your data|adjust your cookie|accept, reject or manage|also opt out)|"
                     r"your consent choices |these cookies and sdks |cookies, device or similar online |"
-                    r"data collected under this category |store and/or access information on a device)", low):
-            continue  # consent 法务模板句 (CNBC/New Scientist 等横幅正文被 readability 误收)
+                    r"data collected under this category |store and/or access information on a device|"
+                    r"the choices you make regarding |your data can be used to |"
+                    r"certain information \(like an ip |privacy policy to learn more\.?$)", low):
+            continue  # consent 法务模板句 (CNBC 等横幅正文被 readability 误收; 丢弃后词数骤减触发服务端重试)
         if re.match(r"^rates?[:\s]", low) or re.match(r"^[a-z. ’']+ for (the )?(atlantic|new york times)$", low):
             continue  # NatGeo 酒店价格行 / "摄影: X for <刊名>" 信用行
         if re.match(r"^(sign up (for|to) |from the \w+ \d{4} issue:|explore the .* issue$)", low) \
@@ -349,8 +360,19 @@ def extract_readability(html: str) -> str | None:
     try:
         from readability import Document
         from bs4 import BeautifulSoup
+        # OneTrust 偏好中心是 73 万字符的大文本块, readability 评分会赢过真正文 — 进评分前整树摘除
+        if "onetrust-consent-sdk" in html:
+            pre = BeautifulSoup(html, "lxml")
+            for el in pre.find_all(id=lambda v: v and v.startswith("onetrust")):
+                el.decompose()
+            html = str(pre)
         doc = Document(html)
         soup = BeautifulSoup(doc.summary(), "lxml")
+        # summary 内残留的 OneTrust 碎片按类名剔除 (ot-*)
+        def _ot(cls) -> bool:
+            return any(c.startswith("ot-") or "onetrust" in c for c in (cls or []))
+        for el in soup.find_all(class_=_ot):
+            el.decompose()
         for tag in soup(["a", "em", "strong", "span", "i", "b", "u", "small", "sup", "sub"]):
             tag.unwrap()  # 行内标签的子孙文本并入父行, 保留词边界
         soup.smooth()  # 合并相邻 NavigableString, 防 get_text 在节点边界插分隔
