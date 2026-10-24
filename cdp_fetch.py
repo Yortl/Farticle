@@ -156,6 +156,40 @@ def _try_click_turnstile(tab) -> bool:
         return False
 
 
+def _click_sourcepoint(tab) -> bool:
+    """Sourcepoint CMP (Guardian/BBC/Atlantic): 弹窗是全屏 OOPIF iframe, 顶文档 JS 摸不到,
+    只能坐标点击。Accept 优先 — Guardian 的 "Reject all and subscribe" 会跳转 Ad-Lite 结账页。
+    按钮行位于对话框底部 (实测 Guardian: y≈738, Accept 左 Reject 右)。"""
+    try:
+        info = tab.eval_js("""
+            (() => {
+              const c = document.querySelector('[id^="sp_message_container"]');
+              if (!c) return null;
+              const r = c.getBoundingClientRect();
+              if (r.height < 50) return null;
+              const f = c.querySelector('iframe');
+              const fr = f ? f.getBoundingClientRect() : r;
+              return JSON.stringify({x: fr.x, y: fr.y, w: fr.width, h: fr.height});
+            })()
+        """)
+        if not info:
+            return False
+        fr = json.loads(info)
+        if fr["w"] < 300 or fr["h"] < 200:  # 非全屏弹窗不在此处理
+            return False
+        # 截图找深蓝色按钮位置太重; 用实测布局: 中央对话框底部一行两钮, 高度约 74% 处
+        bx, by = fr["x"] + fr["w"] * 0.40, fr["y"] + fr["h"] * 0.738  # Accept all (左钮)
+        for act in ("mouseMoved", "mousePressed", "mouseReleased"):
+            tab.call("Input.dispatchMouseEvent", type=act, x=int(bx), y=int(by),
+                     button="left", clickCount=1)
+        print(f"[cdp] sourcepoint clicked ({int(bx)},{int(by)})", file=sys.stderr)
+        time.sleep(3)
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"[cdp] sourcepoint fail: {str(e)[:50]}", file=sys.stderr)
+        return False
+
+
 def _click_consent(tab) -> bool:
     """GDPR cookie consent: 找 Reject All / I Accept 按钮点掉 (wapo 欧区出口必弹,
     不点掉 readability 只能提出 consent 文本)。幂等: 没弹窗就不点。"""
@@ -233,8 +267,10 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
             title = (tab.eval_js("document.title") or "")
             blocked = ("请稍候" in title or "moment" in title.lower()
                        or "attention" in title.lower() or title in ("", "economist.com"))
-            # GDPR cookie consent (wapo 等欧区出口必弹): 点 Reject All 关掉, 否则正文被弹窗挡住
+            # GDPR cookie consent: 顶文档弹窗 (wapo OneTrust 等) 点 Reject All;
+            # Sourcepoint 全屏 iframe 弹窗 (Guardian/BBC/Atlantic) 走坐标点 Accept
             _click_consent(tab)
+            _click_sourcepoint(tab)
             if not blocked:
                 break
             print(f"[cdp] interstitial round {attempt+1}, reloading…", file=sys.stderr)
@@ -255,6 +291,7 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
 _JUNK = {
     "skip to main content", "skip to navigation", "print subscriptions", "search jobs",
     "sign in", "sign out", "newsletters", "share", "show more",
+    "sign in: it's quick and easy", "it's quick and easy",
     "view image in fullscreen", "view illustrations", "eur",
     "skip to content", "site navigation", "comment", "video", "games", "society",
     "women", "men", "love & sex", "already a subscriber?", "log in to hide ads.",
