@@ -10,6 +10,7 @@
 import argparse
 import base64
 import json
+import re
 import socket
 import sys
 import time
@@ -241,32 +242,122 @@ def fetch(host: str, url: str, wait_s: float = 6.0, stealth: bool = False) -> st
         close_chrome_tab()
 
 
+# 精确噪音行 (源自入库坏样本实测): 导航/consent/订阅钩子/图注壳, 整行字面量匹配
+_JUNK = {
+    "skip to main content", "skip to navigation", "print subscriptions", "search jobs",
+    "sign in", "sign out", "newsletters", "share", "show more",
+    "view image in fullscreen", "view illustrations", "eur",
+    "skip to content", "site navigation", "comment", "video", "games", "society",
+    "women", "men", "love & sex", "already a subscriber?", "log in to hide ads.",
+    "books newsletter.", "sign up to", "the recap", "as news breaks",
+    "tech news alerts", "news alerts", "breaking news alerts", "further reading",
+    "back to the top",
+    "the guardian - back to home", "the guardian", "news", "opinion", "sport", "culture",
+    "lifestyle", "environment", "climate crisis", "wildlife", "energy", "pollution",
+    "cookie policy", "cookie settings", "cookie notice", "cookies used", "your privacy",
+    "iab and google vendors", "article information", "prefer the guardian on google",
+    "subscribe", "subscribe now", "subscribe today", "become a subscriber",
+    "subscriber benefits", "newsletters & alerts", "sign up", "sign up now",
+    "enter your email", "when needed", "get the most important news as it breaks",
+    "sign in or create your guardian account to join the discussion",
+    "accept cookies to play video", "subscribe to support independent journalism",
+    "view and manage all cookie consent preferences", "manage settingsrejectaccept",
+    "skip past newsletter promotion", "after newsletter promotion", "free newsletter |",
+    "author,", "role,", "reporting from,", "published", "read more", "continue reading",
+}
+_CREDITS = {"reuters", "getty images", "afp", "ap", "bloomberg", "xinhua", "epa-efe", "getty"}
+_COOKIE_VOCAB = ("cookie", "consent", "vendor")
+_NAV_VOCAB = {"news", "opinion", "sport", "culture", "lifestyle", "environment",
+              "wildlife", "energy", "pollution", "climate", "politics", "world"}
+
+
+def _clean_lines(paras: list[str]) -> list[str]:
+    """段级清洗: 噪音行丢弃 + 相邻去重 + 断句/首字下沉合并。两条提取路径共用。"""
+    paras = [p.strip() for p in paras if p.strip()]
+    # 旧库存量形态: 斜体书名把一句拆成 "stories," | "A Wooded Shore" | ". The more..." 三段 — 预合并
+    pre: list[str] = []
+    for j, l in enumerate(paras):
+        if pre and pre[-1][-1:] not in ".!?:;”’\"'":
+            nxt = paras[j + 1] if j + 1 < len(paras) else ""
+            if l[:2] == ". " or l[:1] in {",", "—"}:
+                pre[-1] += l  # ". xxx"/"—xxx"/", xxx" 是前句延续 (书名/斜体后正文)
+                continue
+            if l[:1].isupper() and l[-1:] not in ".!?:;," and (nxt.startswith(". ") or nxt[:1] in {",", "—"}):
+                pre[-1] = pre[-1].rstrip() + " " + l  # 无标点书名行, 下段以 . / — 续句
+                continue
+        pre.append(l)
+    paras = pre
+    out: list[str] = []
+    for raw in paras:
+        l = raw.strip()
+        if not l:
+            continue
+        low = l.lower()
+        if (low in _JUNK or low in _CREDITS
+                or set(l) <= set("_-–—|•·… ")
+                or low.startswith(("图像来源，", "图像加注文字，"))):
+            continue
+        if sum(c in low for c in _COOKIE_VOCAB) >= 3:  # consent 横幅整段 (cookie/consent/vendor 反复出现)
+            continue
+        if sum(t in _NAV_VOCAB for t in low.replace(",", " ").split()) >= 4:  # 导航容器串 (News Opinion Sport ...)
+            continue
+        if out and l == out[-1]:  # 相邻重复 (分隔线/重复图注)
+            continue
+        if l == "." and out and out[-1][-1:].isalnum():  # 句末句点被拆成孤行 → 归还前段
+            out[-1] += "."
+            continue
+        if low == "newsletter" and out:  # WaPo/Newsweek 页脚起点: NEWSLETTER → 页脚全截
+            break
+        if low in {"most viewed", "reuse this content", "reusing this content",
+                   "explore more on these topics"}:
+            break  # 页面尾部标记: 其后全是相关推荐/页脚, 整体截断
+        if low in _JUNK or low in _CREDITS:  # 大写变体 (SKIP TO CONTENT 等) 在此兜底复查
+            continue
+        if out and out[-1][-1] not in ".,!?:;)]”’\"'" and l[:1].islower():
+            out[-1] = out[-1].rstrip() + " " + l  # 残余拆行 (<br> 等): 词边界, 空格接回
+            continue
+        if not re.search(r"[A-Za-z\u4e00-\u9fff]{3,}", l):
+            continue  # 纯符号/数字/≤2字母碎片 (时间戳 0:00、倍速 1.0x、−、图片信用行)
+        if re.match(r"^(photos?|images?|photographs?):\s", low) or re.match(r"^\S+://\S+$", l):
+            continue  # 图注信用 (Photograph: ...) / 裸链接行
+        if re.match(r"^\|?\s*view illustrations", low) \
+                or re.match(r"^\((image (courtesy|credit)|photo|image)\b.*\)$", low) \
+                or re.match(r"^[a-z. ’']+ for$", low):
+            continue  # 图注壳行 / 括号图源 (Image Courtesy of ...) / 半截摄影信用 (Jason Andrew for)
+        if re.match(r"^(we (will also use other |and our partners )|click 'got it' |"
+                    r"you can (control how your data|adjust your cookie|accept, reject or manage|also opt out)|"
+                    r"your consent choices |these cookies and sdks |cookies, device or similar online |"
+                    r"data collected under this category |store and/or access information on a device)", low):
+            continue  # consent 法务模板句 (CNBC/New Scientist 等横幅正文被 readability 误收)
+        if re.match(r"^rates?[:\s]", low) or re.match(r"^[a-z. ’']+ for (the )?(atlantic|new york times)$", low):
+            continue  # NatGeo 酒店价格行 / "摄影: X for <刊名>" 信用行
+        if re.match(r"^(sign up (for|to) |from the \w+ \d{4} issue:|explore the .* issue$)", low) \
+                or low in {"get in touch", "view more", "the atlantic", "the new york times",
+                           "the washington post", "the economist", "subscribe here.",
+                           "first thing is delivered to thousands of inboxes every weekday. if you’re not already signed up,"}:
+            continue  # 订阅推销 / 期刊互推盒 / 摄影+刊名残行
+        words = l.split()
+        if len(words) == 1 and sum(c.isupper() for c in l[1:]) >= 2 and l[0].isupper():
+            continue  # 泄漏的 CSS/JS 类名 (AccordionItemContainerButton), 正常英文单词不会内部多驼峰
+        out.append(l)
+    return out
+
+
 def extract_readability(html: str) -> str | None:
-    """readability 算法提正文 (HTML→纯文本, 段落分行)。"""
+    """readability 提正文。unwrap 行内标签+smooth 后 get_text("\\n"): 块级边界成行,
+    行内 <a>/<em>/<span> (含首字下沉 T|heze) 永不被拆行 — 拆行只可能来自 <br>。"""
     try:
         from readability import Document
         from bs4 import BeautifulSoup
         doc = Document(html)
-        text = BeautifulSoup(doc.summary(), "lxml").get_text("\n")
-        lines = [l.strip() for l in text.split("\n")]
-        # 修首字下沉拆行: "T" + "hese days..." → "These days..."
-        merged = []
-        i = 0
-        while i < len(lines):
-            l = lines[i]
-            if (len(l) <= 2 and l and i + 1 < len(lines)
-                    and lines[i+1] and lines[i+1][:1].islower()):
-                merged.append(l + lines[i+1])
-                i += 2
-                continue
-            merged.append(l)
-            i += 1
-        out = []
-        for l in merged:
-            if not l and out and not out[-1]:
-                continue
-            out.append(l)
-        return "\n".join(out).strip() or None
+        soup = BeautifulSoup(doc.summary(), "lxml")
+        for tag in soup(["a", "em", "strong", "span", "i", "b", "u", "small", "sup", "sub"]):
+            tag.unwrap()  # 行内标签的子孙文本并入父行, 保留词边界
+        soup.smooth()  # 合并相邻 NavigableString, 防 get_text 在节点边界插分隔
+        text = soup.get_text("\n")
+        paras = [p.replace("\xa0", " ").strip() for p in text.split("\n")]
+        paras = _clean_lines(paras)
+        return "\n\n".join(paras) or None
     except Exception as e:  # noqa: BLE001
         print(f"[cdp] readability fail: {e}", file=sys.stderr)
         return None
