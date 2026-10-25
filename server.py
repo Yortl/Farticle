@@ -13,8 +13,11 @@ API:
 启动: python3 server.py [--port 8900] [--cdp 127.0.0.1:9222]
 """
 import argparse
+import difflib
 import json
 import re
+import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -147,6 +150,33 @@ def slugify(s: str, maxlen: int = 60) -> str:
     return re.sub(r"[\s_]+", "-", s).strip("-")[:maxlen] or "untitled"
 
 
+def epub_find(title: str) -> tuple[str, str] | None:
+    """economist 单篇失败兜底: 从整刊 epub 提取库里按标题相似度搜文章, 返回 (正文, 提取日期)。
+    搜不到/无存量期 → None。epub 目录由 economist_epub.py 维护, 这里只读。"""
+    issues_dir = ROOT / "articles" / "economist-issues"
+    if not issues_dir.exists():
+        return None
+    # 新期优先 (epub 每周六更新, 单篇抓的通常是近几天文章)
+    best = (0.0, None)
+    for idx in sorted(issues_dir.glob("*/index.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        for it in json.loads(idx.read_text()):
+            r = difflib.SequenceMatcher(None, title.lower(), it["title"].lower()).ratio()
+            if r > best[0]:
+                best = (r, idx.parent / it["file"])
+        if best[0] > 0.92:
+            break  # ponytail: 找到高置信即停, 不扫全部期; 文章跨期重发极罕见
+    if best[0] < 0.6 or not best[1] or not best[1].exists():
+        return None
+    raw = best[1].read_text(encoding="utf-8")
+    m = re.match(r"---\n(.*?)\n---\n\n(.*)", raw, re.S)
+    if not m:
+        return None
+    meta = dict(re.findall(r"^(\w+): (.*)$", m.group(1), re.M))
+    if len(m.group(2).split()) < 80:
+        return None
+    return m.group(2).strip(), meta.get("extracted", meta.get("issue", ""))
+
+
 def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "", per: int = 3, days: int = 30,
              min_words: int | None = None, max_words: int | None = None, pub_year: int | None = None):
     data = job_read(jid)
@@ -163,6 +193,15 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     break
                 time.sleep(3)
             words = len(text.split())
+            is_econ = "economist.com" in url
+            if words < 80 or (is_econ and not ok_words(words, min_words, max_words)):
+                # economist 单篇失败兜底: freedium 镜像已死, 从整刊 epub 提取库按标题搜
+                hit = epub_find(title) if is_econ else None
+                if hit:
+                    text, pub_date = hit
+                    words = len(text.split())
+                    data["progress"] = f"镜像失败, 从整刊 epub 命中: {title[:45]}"
+                    job_write(jid, data)
             if words < 80:
                 raise RuntimeError(f"正文仅 {words} 词, 可能被墙/BPC未生效 (看浏览器 tab)")
             if not ok_words(words, min_words, max_words):
@@ -241,6 +280,14 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                                 break
                             time.sleep(3)
                         words = len(text.split())
+                        if not ok_words(words, min_words, max_words) and outlet_name == "economist":
+                            # 镜像失败兜底: 从整刊 epub 提取库按标题搜 (economist_epub.py 维护)
+                            hit = epub_find(a["title"])
+                            if hit:
+                                text, pub_date = hit
+                                words = len(text.split())
+                                data["progress"] = f"[economist] 镜像失败, epub 命中: {a['title'][:45]}"
+                                job_write(jid, data)
                         if not ok_words(words, min_words, max_words):
                             why = ("过短" if words < 80 else
                                    "不在词数范围" if (min_words is not None and max_words is not None) else "过短")
