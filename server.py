@@ -41,6 +41,18 @@ for p in (ART, JOBS):
 app = FastAPI(title="Exam English Fetcher")
 CDP_HOST = "127.0.0.1:9222"
 _jobs_lock = threading.Lock()
+# 取消标记: job_id -> True (run_job 循环里轮询检查)
+_cancelled: set[str] = set()
+
+
+class JobCancelled(Exception):
+    pass
+
+
+def check_cancel(jid: str):
+    """长循环里每篇/每轮调用一次; 被取消则抛异常走统一收尾。"""
+    if jid in _cancelled:
+        raise JobCancelled()
 
 
 def fm_escape(s: str) -> str:
@@ -143,6 +155,7 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
             text, title, pub_date = "", "", ""
             # 两次尝试: 第1次可能只抓到 consent 弹窗层 (点了但正文未渲染), 第2次 cookie 已存
             for attempt in range(2):
+                check_cancel(jid)
                 html, title = fetch(CDP_HOST, url, wait_s=18)
                 text = extract_readability(html) or ""
                 pub_date = extract_date(html, url=url)
@@ -165,6 +178,7 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
             got, seen_titles, seen_urls, existing = [], set(), set(), 0
             outlets = [o.strip() for o in outlet.split(",") if o.strip()]
             for outlet_name in outlets:
+                check_cancel(jid)
                 cfg = OUTLETS.get(outlet_name) or next(
                     (v for v in OUTLETS.values() if v["domain"] == outlet_name), None)
                 if not cfg:
@@ -186,6 +200,7 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                 got_this = 0
                 dec = load_decoder()
                 for a in arts:
+                    check_cancel(jid)
                     if got_this >= per:
                         break
                     # GN 包装链接懒解码: 只解真正要抓的, 省掉整池解码的分钟级等待
@@ -248,6 +263,12 @@ def run_job(jid: str, kind: str, url: str = "", topic: str = "", outlet: str = "
                     time.sleep(2)
             data.update(status="done", articles=got, existing=existing)
         data["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    except JobCancelled:
+        data["cancelled"] = True
+        data.setdefault("skipped", []).append("已被用户取消")
+        data.update(status="cancelled",
+                    progress="已取消",
+                    finished=time.strftime("%Y-%m-%d %H:%M:%S"))
     except Exception as e:  # noqa: BLE001
         data.update(status="error", error=str(e)[:300])
     job_write(jid, data)
@@ -341,6 +362,19 @@ def api_job(jid: str):
     if not j:
         raise HTTPException(404)
     return j
+
+
+@app.post("/api/jobs/{jid}/cancel")
+def api_cancel(jid: str):
+    j = job_read(jid)
+    if not j:
+        raise HTTPException(404)
+    if j["status"] != "running":
+        return {"cancelled": False, "status": j["status"]}
+    _cancelled.add(jid)
+    j["progress"] = "取消中…"
+    job_write(jid, j)
+    return {"cancelled": True}
 
 
 @app.get("/api/articles")

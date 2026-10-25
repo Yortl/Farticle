@@ -49,6 +49,7 @@ button:disabled { opacity: .45; cursor: default; }
 .progress { margin-top: 14px; font-size: 13.5px; color: var(--sub);
   display: none; align-items: center; gap: 8px; }
 .progress.on { display: flex; }
+#btn-cancel { margin-left: auto; padding: 2px 12px; font-size: 12px; }
 .spinner { width: 14px; height: 14px; border: 2px solid var(--line);
   border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -143,7 +144,7 @@ button:disabled { opacity: .45; cursor: default; }
       <span style="font-size:12px;opacity:.8;margin-left:auto">勾选后生效 (不符跳过换下一篇)</span>
     </div>
     <div class="hint">付费墙源经局域网 Chrome + BPC 获取 (标记 BPC), 免费源直接抓取 (标记 直抓)</div>
-    <div class="progress" id="prog"><div class="spinner"></div><span id="prog-text">…</span></div>
+    <div class="progress" id="prog"><div class="spinner"></div><span id="prog-text">…</span><button id="btn-cancel" class="ghost" onclick="cancelJob()" style="display:none">取消</button></div>
     <div class="err" id="err"></div>
   </div>
 
@@ -268,16 +269,34 @@ function showError(msg) {
   el.textContent = msg || "";
 }
 
+let curJid = null;  // 当前轮询的任务 id (取消用)
+
+async function cancelJob() {
+  if (!curJid) return;
+  document.getElementById("btn-cancel").disabled = true;
+  await fetch(`/api/jobs/${curJid}/cancel`, {method: "POST"});
+}
+
 async function pollJob(jid) {
   clearInterval(pollTimer);
+  curJid = jid;
+  document.getElementById("btn-cancel").style.display = "";
+  document.getElementById("btn-cancel").disabled = false;
   pollTimer = setInterval(async () => {
     const j = await (await fetch(`/api/jobs/${jid}`)).json();
     if (j.status === "running") showProg(true, j.progress || j.status);
-    if (j.status === "error") {
-      showProg(false); showError(j.error); clearInterval(pollTimer); return;
+    if (j.status === "error" || j.status === "cancelled") {
+      clearInterval(pollTimer);
+      curJid = null;
+      document.getElementById("btn-cancel").style.display = "none";
+      showProg(true, j.status === "cancelled" ? "已取消" : (j.progress||""), false);
+      if (j.status === "error") showError(j.error);
+      await loadList();
     }
     if (j.status === "done") {
       clearInterval(pollTimer);
+      curJid = null;
+      document.getElementById("btn-cancel").style.display = "none";
       const n = j.articles?.length || 0;
       const skipped = (j.skipped||[]).length ? `, 跳过 ${j.skipped.length}` : "";
       const ex = j.existing ? ` (其中 ${j.existing} 篇已在库)` : "";
