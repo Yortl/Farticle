@@ -465,6 +465,11 @@ def api_del(aid: str):
     return {"deleted": aid}
 
 
+@app.get("/favicon.svg")
+def favicon():
+    return FileResponse(ROOT / "web" / "favicon.svg", media_type="image/svg+xml")
+
+
 @app.get("/")
 def index():
     return FileResponse(ROOT / "web" / "index.html")
