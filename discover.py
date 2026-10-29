@@ -197,12 +197,14 @@ def cdp_decode(cdp_host: str = "127.0.0.1:9222"):
             req = _u.Request(f"http://{cdp_host}/json/new?{q}", method="PUT")
             info = _json.loads(_u.urlopen(req, timeout=15).read())
             tab = Tab(info["webSocketDebuggerUrl"])
-            time.sleep(4)
-            real = tab.eval_js("location.href") or ""
-            if "news.google.com" in real:
+            # ponytail: 302 跳转通常 3-8s, 慢时 10s+ — 轮询拿真实落地 URL, 固定 sleep 会把慢跳转误判成失败 (实测 1/3 成功)
+            real = ""
+            for _ in range(6):
                 time.sleep(3)
                 real = tab.eval_js("location.href") or ""
-            return real if not real.startswith("https://news.google.com/") else None
+                if real and not real.startswith("https://news.google.com/"):
+                    break
+            return real if real and not real.startswith("https://news.google.com/") else None
         except Exception:
             return None
         finally:

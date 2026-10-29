@@ -32,7 +32,11 @@ OUTLETS = {
                     "mirror": "https://freedium-mirror.cfd/"},   # freedium 免费镜像拿全文
     "discover":    {"domain": "discovermagazine.com","tier": "metered", "enabled": True},  # 《发现》杂志, CDP拿全文
     "nytimes":     {"domain": "nytimes.com",        "tier": "metered", "enabled": True},
-    "wsj":         {"domain": "wsj.com",            "tier": "hard",    "enabled": False},
+    # ---- 2026-10-29 新增: CDP+Mac Chrome(BPC) 实测 ----
+    # wsj: 453词全文直出; latimes: 1462词全文直出; times: 服务端门控只给开头(BPC/cookie全试过), 暂禁
+    "wsj":         {"domain": "wsj.com",            "tier": "metered", "enabled": True},
+    "latimes":     {"domain": "latimes.com",        "tier": "metered", "enabled": True},
+    "times":       {"domain": "thetimes.com",       "tier": "metered", "enabled": False},
     "hbr":         {"domain": "hbr.org",            "tier": "hard",    "enabled": False},
     "ft":          {"domain": "ft.com",             "tier": "hard",    "enabled": False},
 }

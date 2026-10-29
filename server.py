@@ -331,6 +331,7 @@ OUTLET_LABELS = {
     "wired": "Wired", "cnbc": "CNBC", "npr": "NPR", "vox": "Vox",
     "arstechnica": "Ars Technica",
     "economist": "经济学人", "nytimes": "纽约时报", "discover": "发现杂志",
+    "wsj": "华尔街日报", "times": "泰晤士报", "latimes": "洛杉矶时报",
     "chinadaily": "中国日报", "bjreview": "北京周报",
 }
 
